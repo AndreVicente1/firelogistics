@@ -1,4 +1,24 @@
 (function (global) {
+  const FUEL_COLORS = {
+    water: "#123145",
+    mineral: "#8f9690",
+    crops: "#b99b3a",
+    grass: "#79a95b",
+    scrub: "#8a7b38",
+    forest: "#245c36",
+    urban: "#343b3c"
+  };
+
+  const FUEL_LEGEND_ITEMS = [
+    { id: "water", label: "Eau", color: FUEL_COLORS.water },
+    { id: "mineral", label: "Mineral", color: FUEL_COLORS.mineral },
+    { id: "crops", label: "Cultures", color: FUEL_COLORS.crops },
+    { id: "grass", label: "Herbe", color: FUEL_COLORS.grass },
+    { id: "scrub", label: "Broussailles", color: FUEL_COLORS.scrub },
+    { id: "forest", label: "Foret", color: FUEL_COLORS.forest },
+    { id: "urban", label: "Urbain", color: FUEL_COLORS.urban }
+  ];
+
   function sendToGodot(action, payload) {
     const message = JSON.stringify({ action, payload });
     if (global.godot?.ipc) {
@@ -27,7 +47,201 @@
     return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
   }
 
+  function buildFuelLayerDefinitions() {
+    return [
+      {
+        id: "fuel-water",
+        type: "fill",
+        source: "france",
+        "source-layer": "water",
+        paint: {
+          "fill-color": FUEL_COLORS.water,
+          "fill-opacity": 0.72
+        }
+      },
+      {
+        id: "fuel-mineral",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        filter: ["in", ["get", "class"], ["literal", ["rock", "sand"]]],
+        paint: {
+          "fill-color": FUEL_COLORS.mineral,
+          "fill-opacity": 0.46
+        }
+      },
+      {
+        id: "fuel-crops",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        filter: ["==", ["get", "class"], "farmland"],
+        paint: {
+          "fill-color": FUEL_COLORS.crops,
+          "fill-opacity": 0.62
+        }
+      },
+      {
+        id: "fuel-grass",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        filter: ["==", ["get", "class"], "grass"],
+        paint: {
+          "fill-color": FUEL_COLORS.grass,
+          "fill-opacity": 0.58
+        }
+      },
+      {
+        id: "fuel-scrub",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        filter: ["==", ["get", "subclass"], "scrub"],
+        paint: {
+          "fill-color": FUEL_COLORS.scrub,
+          "fill-opacity": 0.64
+        }
+      },
+      {
+        id: "fuel-forest",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        filter: ["==", ["get", "class"], "wood"],
+        paint: {
+          "fill-color": FUEL_COLORS.forest,
+          "fill-opacity": 0.72
+        }
+      },
+      {
+        id: "fuel-urban",
+        type: "fill",
+        source: "france",
+        "source-layer": "landuse",
+        filter: [
+          "in",
+          ["get", "class"],
+          ["literal", ["residential", "industrial", "commercial", "retail"]]
+        ],
+        paint: {
+          "fill-color": FUEL_COLORS.urban,
+          "fill-opacity": 0.68
+        }
+      }
+    ];
+  }
+
+  function buildFuelLegendItems() {
+    return FUEL_LEGEND_ITEMS.map(item => ({ ...item }));
+  }
+
+  function renderFuelLegend() {
+    const root = document.getElementById("fuel-legend");
+    if (!root) return;
+    root.innerHTML = buildFuelLegendItems().map(item => `
+      <div class="fuel-legend-item">
+        <span class="fuel-swatch" style="background:${item.color}"></span>
+        <span>${item.label}</span>
+      </div>
+    `).join("");
+  }
+
   function buildFranceWorldStyle() {
+    const baseLayers = [
+      {
+        id: "background",
+        type: "background",
+        paint: { "background-color": "#0f1413" }
+      },
+      {
+        id: "world-backdrop-water",
+        type: "fill",
+        source: "world-backdrop",
+        filter: ["==", ["get", "kind"], "water"],
+        paint: {
+          "fill-color": "#101c24",
+          "fill-opacity": 0.95
+        }
+      },
+      {
+        id: "world-backdrop-land",
+        type: "fill",
+        source: "world-backdrop",
+        filter: ["==", ["get", "kind"], "land"],
+        paint: {
+          "fill-color": "#151b18",
+          "fill-opacity": 0.92
+        }
+      },
+      {
+        id: "landcover",
+        type: "fill",
+        source: "france",
+        "source-layer": "landcover",
+        paint: {
+          "fill-color": "#151b18",
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.08, 4, 0.16, 6, 0.22, 8, 0.28]
+        }
+      },
+      {
+        id: "landuse",
+        type: "fill",
+        source: "france",
+        "source-layer": "landuse",
+        paint: {
+          "fill-color": "#1a211d",
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.08, 6, 0.16, 8, 0.24]
+        }
+      },
+      {
+        id: "parks",
+        type: "fill",
+        source: "france",
+        "source-layer": "park",
+        paint: { "fill-color": "#1c2a20", "fill-opacity": 0.28 }
+      }
+    ];
+    const overlayLayers = [
+      {
+        id: "water",
+        type: "fill",
+        source: "france",
+        "source-layer": "water",
+        paint: { "fill-color": "#101c24", "fill-opacity": 0.42 }
+      },
+      {
+        id: "waterways",
+        type: "line",
+        source: "france",
+        "source-layer": "waterway",
+        paint: {
+          "line-color": "#173245",
+          "line-opacity": 0.9,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 13, 1.6, 16, 4]
+        }
+      },
+      {
+        id: "transportation",
+        type: "line",
+        source: "france",
+        "source-layer": "transportation",
+        paint: {
+          "line-color": "#c5cac4",
+          "line-opacity": 0.82,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.45, 10, 1.2, 13, 2.8, 16, 8]
+        }
+      },
+      {
+        id: "buildings",
+        type: "fill",
+        source: "france",
+        "source-layer": "building",
+        minzoom: 13,
+        paint: { "fill-color": "#202728", "fill-opacity": 0.9 }
+      }
+    ];
+
     return {
       version: 8,
       name: "Fire Logistics France",
@@ -42,97 +256,7 @@
           url: "pmtiles://data/france-openmaptiles.pmtiles"
         }
       },
-      layers: [
-        {
-          id: "background",
-          type: "background",
-          paint: { "background-color": "#0f1413" }
-        },
-        {
-          id: "world-backdrop-water",
-          type: "fill",
-          source: "world-backdrop",
-          filter: ["==", ["get", "kind"], "water"],
-          paint: {
-            "fill-color": "#101c24",
-            "fill-opacity": 0.95
-          }
-        },
-        {
-          id: "world-backdrop-land",
-          type: "fill",
-          source: "world-backdrop",
-          filter: ["==", ["get", "kind"], "land"],
-          paint: {
-            "fill-color": "#151b18",
-            "fill-opacity": 0.92
-          }
-        },
-        {
-          id: "landcover",
-          type: "fill",
-          source: "france",
-          "source-layer": "landcover",
-          paint: {
-            "fill-color": "#151b18",
-            "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.12, 4, 0.28, 6, 0.55, 8, 0.7]
-          }
-        },
-        {
-          id: "landuse",
-          type: "fill",
-          source: "france",
-          "source-layer": "landuse",
-          paint: {
-            "fill-color": "#1a211d",
-            "fill-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.15, 6, 0.4, 8, 0.82]
-          }
-        },
-        {
-          id: "parks",
-          type: "fill",
-          source: "france",
-          "source-layer": "park",
-          paint: { "fill-color": "#1c2a20", "fill-opacity": 0.78 }
-        },
-        {
-          id: "water",
-          type: "fill",
-          source: "france",
-          "source-layer": "water",
-          paint: { "fill-color": "#101c24", "fill-opacity": 0.95 }
-        },
-        {
-          id: "waterways",
-          type: "line",
-          source: "france",
-          "source-layer": "waterway",
-          paint: {
-            "line-color": "#173245",
-            "line-opacity": 0.9,
-            "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 13, 1.6, 16, 4]
-          }
-        },
-        {
-          id: "transportation",
-          type: "line",
-          source: "france",
-          "source-layer": "transportation",
-          paint: {
-            "line-color": "#46554f",
-            "line-opacity": 0.88,
-            "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.45, 10, 1.2, 13, 2.8, 16, 8]
-          }
-        },
-        {
-          id: "buildings",
-          type: "fill",
-          source: "france",
-          "source-layer": "building",
-          minzoom: 13,
-          paint: { "fill-color": "#222c28", "fill-opacity": 0.88 }
-        }
-      ]
+      layers: [...baseLayers, ...buildFuelLayerDefinitions(), ...overlayLayers]
     };
   }
 
@@ -212,6 +336,7 @@
 
   if (typeof global.addEventListener === "function" && global.document) {
     global.addEventListener("DOMContentLoaded", () => {
+      renderFuelLegend();
       api.map = initMap();
       document.getElementById("diagnostics-button").addEventListener("click", () => {
         sendToGodot("diagnostics_log", "Diagnostic WebView Fire Logistics OK");
@@ -223,6 +348,12 @@
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { buildFranceWorldStyle, formatBytes };
+    module.exports = {
+      FUEL_COLORS,
+      buildFranceWorldStyle,
+      buildFuelLayerDefinitions,
+      buildFuelLegendItems,
+      formatBytes
+    };
   }
 })(typeof window !== "undefined" ? window : globalThis);

@@ -55,7 +55,8 @@ body,
 }
 
 .status-grid > div,
-.panel {
+.panel,
+.fuel-panel {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   padding: 10px;
@@ -78,11 +79,40 @@ h1 {
   font-size: 16px;
 }
 
+h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
 p {
   margin: 0;
   color: #c9d8d2;
   font-size: 14px;
   line-height: 1.45;
+}
+
+.fuel-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 10px;
+}
+
+.fuel-legend-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  color: #d9e5df;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fuel-swatch {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
 }
 
 .actions {

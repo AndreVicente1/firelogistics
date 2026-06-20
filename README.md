@@ -294,6 +294,7 @@ La génération nationale ne doit être testée qu'après validation du pipeline
 - Projet Godot/.NET minimal, Core, WebView et tests bootstrap. Fait.
 - Fond de carte France PMTiles repris de LogisticBuilder dans `assets/web/data/france-openmaptiles.pmtiles`. Fait.
 - Fond monde terre/eau repris de LogisticBuilder dans `assets/web/data/world-backdrop.geojson`. Fait.
+- Couche combustible permanente France entière dérivée des classes PMTiles (`wood`, `farmland`, `grass`, `scrub`, `water`, `landuse`). Fait.
 
 ### Phase 1 - Bootstrap technique approfondi
 
@@ -301,7 +302,7 @@ La génération nationale ne doit être testée qu'après validation du pipeline
 - Ajouter une vraie structure d'état de jeu dans `FireLogistics.Core`.
 - Préparer le pont binaire C# -> WebView pour les futures couches feu/unités.
 - Ajouter une première scène 3D tactique contrôlée par état Core.
-- Ajouter les contrôles de couches carte France : végétation, routes, casernes, points d'eau et incidents.
+- Ajouter les prochaines couches carte France : casernes, points d'eau, incidents, météo et périmètres opérationnels.
 - Préparer le futur multi-instance seulement après stabilisation solo.
 
 ### Phase 2 - Données végétation
@@ -367,4 +368,4 @@ Le projet initial sera considéré correctement cadré quand :
 
 ## Statut
 
-Scaffold initial implémenté. Le dépôt compile, les tests Core/Web bootstrap passent, Godot démarre en headless avec une scène 3D placeholder, et la WebView charge le style France PMTiles local avec fond monde hérité de LogisticBuilder. Les systèmes de feu, végétation OSO, routage opérationnel, unités et gameplay restent à implémenter.
+Scaffold initial implémenté. Le dépôt compile, les tests Core/Web bootstrap passent, Godot démarre en headless avec une scène 3D placeholder, et la WebView charge le style France PMTiles local avec fond monde et couche combustible permanente. Les systèmes de feu, végétation OSO fine, routage opérationnel, unités et gameplay restent à implémenter.
