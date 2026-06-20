@@ -94,7 +94,8 @@ test("map style includes tactical wildfire layers above terrain and below roads"
     "fire-ember-bed",
     "fire-active-core",
     "fire-active-glow",
-    "fire-perimeter"
+    "fire-perimeter",
+    "wildfire-ignition"
   ]);
   assert.equal(fireLayers.find(layer => layer.id === "fire-active-core").paint["fill-color"], FIRE_COLORS.active);
   assert.equal(fireLayers.find(layer => layer.id === "fire-burn-scar").paint["fill-color"], FIRE_COLORS.burned);
@@ -115,6 +116,8 @@ test("wildfire simulation frame expands deterministically", () => {
   assert.equal(initial.zones.type, "FeatureCollection");
   assert.ok(initial.zones.features.every(feature => feature.properties.fuel));
   assert.ok(initial.zones.features.some(feature => feature.properties.state === "active"));
+  assert.ok(initial.zones.features.length <= 4);
+  assert.ok(initial.zones.features.every(feature => feature.geometry.coordinates[0].length > 20));
   assert.equal(initial.emitters.length, initial.stats.activeCells);
   assert.ok(later.stats.burnedHectares > initial.stats.burnedHectares);
   assert.ok(later.stats.frontKilometers > initial.stats.frontKilometers);
@@ -129,13 +132,12 @@ test("wildfire exposes nearby buildings without making water or mineral burn", (
   const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
 
   const frame = buildFireSimulationFrame(25);
-  const affectedFuelTypes = new Set(frame.zones.features.map(feature => feature.properties.fuel));
 
   assert.ok(frame.stats.threatenedBuildings > 0);
-  assert.ok(affectedFuelTypes.has("forest"));
-  assert.ok(affectedFuelTypes.has("scrub"));
-  assert.ok(!affectedFuelTypes.has("water"));
-  assert.ok(!affectedFuelTypes.has("mineral"));
+  assert.ok(frame.stats.fuelImpacts.forest > 0);
+  assert.ok(frame.stats.fuelImpacts.scrub > 0);
+  assert.equal(frame.stats.fuelImpacts.water, 0);
+  assert.equal(frame.stats.fuelImpacts.mineral, 0);
 });
 
 test("wildfire accepts rendered fuel overrides from the map", () => {
@@ -147,6 +149,19 @@ test("wildfire accepts rendered fuel overrides from the map", () => {
   assert.equal(frame.stats.burnedHectares, 0);
   assert.equal(frame.stats.activeCells, 0);
   assert.equal(frame.zones.features.length, 0);
+});
+
+test("wildfire frame can start from a selected map coordinate", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const defaultFrame = buildFireSimulationFrame(0);
+  const selectedFrame = buildFireSimulationFrame(0, { center: [6.12, 43.85] });
+
+  assert.deepEqual(selectedFrame.center, [6.12, 43.85]);
+  assert.notDeepEqual(
+    selectedFrame.zones.features[0].geometry.coordinates[0][0],
+    defaultFrame.zones.features[0].geometry.coordinates[0][0]
+  );
 });
 
 test("fuel legend exposes all gameplay categories", () => {

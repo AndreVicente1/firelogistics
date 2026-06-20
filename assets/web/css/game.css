@@ -194,6 +194,7 @@ p {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -218,11 +219,31 @@ button:hover {
 
 .fire-panel button:first-child {
   border-color: rgba(255, 160, 80, 0.38);
-  background: #743014;
+  background: #4b3a1f;
 }
 
 .fire-panel button:first-child:hover {
+  background: #66502b;
+}
+
+.fire-panel button:nth-child(2) {
+  border-color: rgba(255, 160, 80, 0.38);
+  background: #743014;
+}
+
+.fire-panel button:nth-child(2):hover {
   background: #8b3b18;
+}
+
+.selecting-fire-start #map,
+.selecting-fire-start #map canvas {
+  cursor: crosshair;
+}
+
+.selecting-fire-start #fire-start-button {
+  border-color: rgba(255, 218, 150, 0.72);
+  background: #9a471b;
+  box-shadow: 0 0 0 2px rgba(255, 110, 31, 0.18);
 }
 
 @media (max-width: 720px) {
