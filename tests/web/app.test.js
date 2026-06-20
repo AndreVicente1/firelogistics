@@ -140,6 +140,16 @@ test("wildfire exposes nearby buildings without making water or mineral burn", (
   assert.equal(frame.stats.fuelImpacts.mineral, 0);
 });
 
+test("wildfire keeps a wind-driven front alive over a longer incident", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const frame = buildFireSimulationFrame(140);
+
+  assert.ok(frame.stats.activeCells > 0);
+  assert.ok(frame.stats.frontKilometers > 0);
+  assert.ok(frame.zones.features.some(feature => feature.properties.state === "active"));
+});
+
 test("wildfire accepts rendered fuel overrides from the map", () => {
   const { FIRE_GRID, buildFireSimulationFrame } = require("../../assets/web/js/app.js");
   const waterOverrides = Array.from({ length: FIRE_GRID.width * FIRE_GRID.height }, () => "water");

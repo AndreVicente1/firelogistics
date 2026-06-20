@@ -1,98 +1,32 @@
 (function (global) {
-  const DEFAULT_FIRE_CENTER = [5.38, 43.3];
-  const FIRE_SOURCE_ID = "wildfire-zones";
-  const IGNITION_SOURCE_ID = "wildfire-ignition";
+  const Model = typeof require !== "undefined"
+    ? require("./fire-model.js")
+    : global.FireLogisticsFireModel;
 
-  const FIRE_COLORS = {
-    heat: "#ff9c2f",
-    active: "#ff3d00",
-    embers: "#d63b17",
-    burned: "#15100d",
-    perimeter: "#ffd6a3",
-    smoke: "#b4b5ad"
+  const {
+    DEFAULT_FIRE_CENTER,
+    FIRE_COLORS,
+    FIRE_GRID,
+    FIRE_LEGEND_ITEMS,
+    FIRE_SOURCE_ID,
+    FUEL_BEHAVIOR,
+    IGNITION_SOURCE_ID,
+    WIND_MODEL,
+    clamp,
+    deterministicNoise,
+    getCellLocalKm,
+    localKmToLngLat,
+    normalizeCenter,
+    sampleScenarioFuel
+  } = Model;
+
+  const STATE = {
+    UNBURNED: "unburned",
+    HEAT: "heat",
+    ACTIVE: "active",
+    EMBERS: "embers",
+    BURNED: "burned"
   };
-
-  const FIRE_LEGEND_ITEMS = [
-    { id: "active", label: "Front actif", color: FIRE_COLORS.active },
-    { id: "embers", label: "Braises", color: FIRE_COLORS.embers },
-    { id: "burned", label: "Zone brulee", color: FIRE_COLORS.burned },
-    { id: "heat", label: "Chaleur", color: FIRE_COLORS.heat }
-  ];
-
-  const FIRE_GRID = {
-    width: 35,
-    height: 27,
-    cellKm: 0.22
-  };
-
-  const WIND_MODEL = {
-    direction: "E-NE",
-    degrees: 72,
-    vector: [0.92, 0.39]
-  };
-
-  const FUEL_BEHAVIOR = {
-    water: { burnable: false, ignition: 0, burnTicks: 0, flame: 0, resistance: 99 },
-    mineral: { burnable: false, ignition: 0, burnTicks: 0, flame: 0, resistance: 99 },
-    crops: { burnable: true, ignition: 0.44, burnTicks: 4, flame: 0.48, resistance: 0.16 },
-    grass: { burnable: true, ignition: 0.64, burnTicks: 3, flame: 0.58, resistance: 0.06 },
-    scrub: { burnable: true, ignition: 0.78, burnTicks: 5, flame: 0.78, resistance: 0.02 },
-    forest: { burnable: true, ignition: 0.9, burnTicks: 8, flame: 0.95, resistance: 0.04 },
-    urban: { burnable: true, ignition: 0.22, burnTicks: 7, flame: 0.66, resistance: 0.58 }
-  };
-
-  function normalizeCenter(center) {
-    if (!Array.isArray(center) || center.length < 2) return DEFAULT_FIRE_CENTER;
-    const lng = Number(center[0]);
-    const lat = Number(center[1]);
-    return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : DEFAULT_FIRE_CENTER;
-  }
-
-  function deterministicNoise(x, y, seed) {
-    const value = Math.sin((x + 11.7) * 12.9898 + (y - 4.3) * 78.233 + seed * 37.719) * 43758.5453;
-    return value - Math.floor(value);
-  }
-
-  function getCellLocalKm(x, y) {
-    return {
-      xKm: (x - (FIRE_GRID.width - 1) * 0.5) * FIRE_GRID.cellKm,
-      yKm: (y - (FIRE_GRID.height - 1) * 0.5) * FIRE_GRID.cellKm
-    };
-  }
-
-  function localKmToLngLat(center, xKm, yKm) {
-    const origin = normalizeCenter(center);
-    const lat = origin[1];
-    const lngPerKm = 1 / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
-    const latPerKm = 1 / 110.57;
-    return [
-      origin[0] + xKm * lngPerKm,
-      origin[1] + yKm * latPerKm
-    ];
-  }
-
-  function sampleScenarioFuel(xKm, yKm) {
-    const river = Math.abs(yKm + 1.05 + Math.sin((xKm + 0.6) * 1.2) * 0.16);
-    if (river < 0.12 && xKm > -3.5 && xKm < 3.6) return "water";
-
-    const ridgeTrack = Math.abs(yKm - (xKm * 0.32 - 0.45));
-    if (ridgeTrack < 0.08 && xKm > -3.2 && xKm < 3.5) return "mineral";
-    if (Math.abs(xKm + 2.75) < 0.08 && yKm < 1.8) return "mineral";
-
-    const villageA = Math.hypot(xKm - 1.45, yKm - 0.42);
-    const villageB = Math.hypot(xKm - 2.42, yKm - 0.42);
-    const hamlet = Math.hypot(xKm + 1.45, yKm - 1.1);
-    if (villageA < 0.43 || villageB < 0.36 || hamlet < 0.32) return "urban";
-
-    const roughness = deterministicNoise(Math.round(xKm * 8), Math.round(yKm * 8), 3);
-    if ((yKm > 0.26 && xKm < 2.75) || (xKm > 0.75 && yKm > 0.54)) {
-      return roughness > 0.22 ? "forest" : "scrub";
-    }
-    if (yKm > -0.82 && xKm < 1.7) return roughness > 0.34 ? "scrub" : "grass";
-    if (xKm < -1.4 && yKm < -0.25) return "crops";
-    if (roughness > 0.72) return "scrub";
-    return yKm < -1.25 ? "crops" : "grass";
-  }
 
   function createInitialFireCells(fuelOverrides) {
     const cells = [];
@@ -101,17 +35,19 @@
         const local = getCellLocalKm(x, y);
         const override = Array.isArray(fuelOverrides) ? fuelOverrides[y * FIRE_GRID.width + x] : null;
         const fuel = override && FUEL_BEHAVIOR[override] ? override : sampleScenarioFuel(local.xKm, local.yKm);
+        const behavior = FUEL_BEHAVIOR[fuel];
         const distanceToIgnition = Math.hypot(local.xKm, local.yKm);
-        const active = distanceToIgnition < 0.34 && FUEL_BEHAVIOR[fuel].burnable;
+        const active = distanceToIgnition < 0.34 && behavior.burnable;
         cells.push({
           x,
           y,
           ...local,
           fuel,
-          state: active ? "active" : "unburned",
+          state: active ? STATE.ACTIVE : STATE.UNBURNED,
           age: 0,
           heat: active ? 1 : 0,
-          intensity: active ? FUEL_BEHAVIOR[fuel].flame : 0
+          fuelLoad: behavior.burnable ? 1 : 0,
+          intensity: active ? behavior.flame : 0
         });
       }
     }
@@ -127,95 +63,175 @@
     return cells.map(cell => ({ ...cell }));
   }
 
-  function computeSpreadScore(source, target, dx, dy, tick) {
-    const targetFuel = FUEL_BEHAVIOR[target.fuel];
-    if (!targetFuel.burnable) return -99;
+  function ignitionThreshold(cell) {
+    const behavior = FUEL_BEHAVIOR[cell.fuel];
+    if (!behavior.burnable) return Infinity;
+    return behavior.ignition + behavior.moisture * 0.18 + behavior.resistance * 0.12;
+  }
+
+  function windAlignment(dx, dy) {
+    const distance = Math.hypot(dx, dy) || 1;
+    return (dx * WIND_MODEL.vector[0] + dy * WIND_MODEL.vector[1]) / distance;
+  }
+
+  function sourceRadiantPower(cell) {
+    const behavior = FUEL_BEHAVIOR[cell.fuel];
+    if (cell.state === STATE.ACTIVE) {
+      const loadFactor = clamp(cell.fuelLoad * 1.35, 0.28, 1.15);
+      return behavior.flame * loadFactor * (0.86 + cell.heat * 0.28);
+    }
+    if (cell.state === STATE.EMBERS) {
+      return behavior.flame * clamp(cell.heat, 0.2, 0.62) * 0.42;
+    }
+    return 0;
+  }
+
+  function heatTransfer(source, target, dx, dy, tick) {
+    const targetBehavior = FUEL_BEHAVIOR[target.fuel];
+    if (!targetBehavior.burnable) return 0;
 
     const distance = Math.hypot(dx, dy) || 1;
-    const alignment = (dx * WIND_MODEL.vector[0] + dy * WIND_MODEL.vector[1]) / distance;
-    const windBonus = Math.max(-0.18, alignment * 0.32);
-    const slopeProxy = Math.max(-0.08, Math.min(0.12, (target.yKm - source.yKm) * 0.05));
-    const noise = deterministicNoise(target.x, target.y, tick);
-    const urbanPenalty = target.fuel === "urban" ? 0.32 : 0;
+    const alignment = windAlignment(dx, dy);
+    const windFactor = clamp(1 + alignment * 0.72, 0.24, 1.95);
+    const distanceFactor = 1 / Math.pow(distance, 1.35);
+    const slopeFactor = clamp(1 + (target.yKm - source.yKm) * 0.06, 0.88, 1.14);
+    const noiseFactor = 0.9 + deterministicNoise(target.x, target.y, tick) * 0.22;
+    const fuelFactor = targetBehavior.spread * (1 - targetBehavior.moisture * 0.34);
 
-    return (
-      targetFuel.ignition * 0.56 +
-      source.intensity * 0.42 +
-      windBonus +
-      slopeProxy +
-      noise * 0.2 -
-      targetFuel.resistance -
-      urbanPenalty
-    );
+    return sourceRadiantPower(source) * fuelFactor * windFactor * distanceFactor * slopeFactor * noiseFactor * 0.24;
+  }
+
+  function applyHeatDiffusion(cells, next, tick) {
+    for (const source of cells) {
+      if (source.state !== STATE.ACTIVE && source.state !== STATE.EMBERS) continue;
+      const radius = source.state === STATE.ACTIVE ? 2 : 1;
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const target = getCell(cells, source.x + dx, source.y + dy);
+          const targetNext = getCell(next, source.x + dx, source.y + dy);
+          if (!target || !targetNext || target.state === STATE.BURNED || target.state === STATE.ACTIVE) continue;
+
+          const addedHeat = heatTransfer(source, target, dx, dy, tick);
+          if (addedHeat <= 0) continue;
+          targetNext.heat = clamp(targetNext.heat + addedHeat, 0, 1.35);
+          if (targetNext.state === STATE.UNBURNED && targetNext.heat > 0.22) {
+            targetNext.state = STATE.HEAT;
+          }
+        }
+      }
+    }
+  }
+
+  function applySpotting(cells, next, tick) {
+    for (const source of cells) {
+      const behavior = FUEL_BEHAVIOR[source.fuel];
+      if (source.state !== STATE.ACTIVE || behavior.spotting <= 0) continue;
+
+      const downwindX = Math.round(source.x + WIND_MODEL.vector[0] * (2 + behavior.spotting * 12));
+      const downwindY = Math.round(source.y + WIND_MODEL.vector[1] * (1 + behavior.spotting * 6));
+      const candidate = getCell(cells, downwindX, downwindY);
+      const candidateNext = getCell(next, downwindX, downwindY);
+      if (!candidate || !candidateNext || candidate.state === STATE.ACTIVE || candidate.state === STATE.BURNED) continue;
+
+      const targetBehavior = FUEL_BEHAVIOR[candidate.fuel];
+      if (!targetBehavior.burnable || candidate.heat < 0.12) continue;
+
+      const probability = behavior.spotting * source.intensity * (1 - targetBehavior.moisture) * 0.55;
+      if (deterministicNoise(source.x + candidate.x, source.y + candidate.y, tick + 19) < probability) {
+        candidateNext.heat = Math.max(candidateNext.heat, ignitionThreshold(candidate) + 0.04);
+        candidateNext.state = STATE.HEAT;
+      }
+    }
+  }
+
+  function updateCombustionStates(next) {
+    for (const cell of next) {
+      const behavior = FUEL_BEHAVIOR[cell.fuel];
+
+      if (cell.state === STATE.ACTIVE) {
+        cell.age += 1;
+        const consumption = (0.38 + cell.intensity * 0.2) / Math.max(1, behavior.burnTicks);
+        cell.fuelLoad = clamp(cell.fuelLoad - consumption, 0, 1);
+        cell.heat = clamp(cell.heat + 0.1, 0, 1.2);
+        const maturity = clamp(cell.age / Math.max(1, behavior.burnTicks), 0, 1);
+        cell.intensity = behavior.flame * clamp(cell.fuelLoad * 1.22, 0.18, 1) * (1 - maturity * 0.22);
+
+        if (cell.fuelLoad <= 0.1 || cell.age >= behavior.burnTicks * 1.45) {
+          cell.state = STATE.EMBERS;
+          cell.age = 0;
+          cell.heat = Math.max(cell.heat, 0.58);
+          cell.intensity = behavior.flame * 0.34;
+        }
+      } else if (cell.state === STATE.EMBERS) {
+        cell.age += 1;
+        cell.heat = clamp(cell.heat * (0.92 - behavior.moisture * 0.05), 0, 1);
+        cell.intensity = behavior.flame * clamp(cell.heat, 0.18, 0.48);
+        if (cell.age >= behavior.emberTicks || cell.heat < 0.18) {
+          cell.state = STATE.BURNED;
+          cell.heat = 0.08;
+          cell.intensity = 0;
+        }
+      } else if (cell.state === STATE.HEAT) {
+        cell.age += 1;
+        cell.heat = clamp(cell.heat * (0.94 - behavior.moisture * 0.12), 0, 1.35);
+        if (cell.heat >= ignitionThreshold(cell)) {
+          cell.state = STATE.ACTIVE;
+          cell.age = 0;
+          cell.intensity = behavior.flame * clamp(cell.heat, 0.55, 1.1);
+        } else if (cell.heat < 0.16 || cell.age > 10) {
+          cell.state = STATE.UNBURNED;
+          cell.age = 0;
+          cell.heat = 0;
+        }
+      }
+    }
   }
 
   function advanceFireCells(cells, tick) {
     const next = cloneFireCells(cells);
-
-    for (const source of cells) {
-      if (source.state !== "active") continue;
-      const sourceNext = getCell(next, source.x, source.y);
-      sourceNext.age += 1;
-      sourceNext.heat = Math.max(0, source.heat - 0.05);
-      sourceNext.intensity = Math.max(0.1, FUEL_BEHAVIOR[source.fuel].flame * (1 - source.age / (FUEL_BEHAVIOR[source.fuel].burnTicks + 2)));
-
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const target = getCell(cells, source.x + dx, source.y + dy);
-          const targetNext = getCell(next, source.x + dx, source.y + dy);
-          if (!target || !targetNext || target.state === "active" || target.state === "embers" || target.state === "burned") continue;
-
-          const score = computeSpreadScore(source, target, dx, dy, tick);
-          const threshold = target.fuel === "urban" ? 0.88 : 0.66;
-          if (score > threshold) {
-            targetNext.state = "active";
-            targetNext.age = 0;
-            targetNext.heat = Math.min(1, score);
-            targetNext.intensity = FUEL_BEHAVIOR[target.fuel].flame;
-          } else if (score > 0.35 && targetNext.state === "unburned") {
-            targetNext.state = "heat";
-            targetNext.heat = Math.max(targetNext.heat, Math.min(0.72, score));
-          }
-        }
-      }
-
-      if (sourceNext.age >= FUEL_BEHAVIOR[source.fuel].burnTicks) {
-        sourceNext.state = "embers";
-        sourceNext.age = 0;
-        sourceNext.intensity = Math.max(0.24, FUEL_BEHAVIOR[source.fuel].flame * 0.45);
-      }
-    }
-
-    for (const cell of next) {
-      if (cell.state === "heat") {
-        cell.age += 1;
-        cell.heat *= 0.84;
-        if (cell.heat < 0.22 || cell.age > 5) {
-          cell.state = "unburned";
-          cell.age = 0;
-          cell.heat = 0;
-        }
-      } else if (cell.state === "embers") {
-        cell.age += 1;
-        cell.heat = Math.max(0.2, cell.heat * 0.88);
-        if (cell.age >= 5) {
-          cell.state = "burned";
-          cell.intensity = 0;
-        }
-      }
-    }
-
+    applyHeatDiffusion(cells, next, tick);
+    applySpotting(cells, next, tick);
+    updateCombustionStates(next);
     return next;
   }
 
   function simulateFireCells(step, fuelOverrides) {
-    const maxStep = Math.min(80, Math.max(0, Number(step) || 0));
+    const maxStep = Math.min(160, Math.max(0, Number(step) || 0));
     let cells = createInitialFireCells(fuelOverrides);
     for (let tick = 1; tick <= maxStep; tick++) {
       cells = advanceFireCells(cells, tick);
     }
     return cells;
+  }
+
+  function createFireSimulationState(options = {}) {
+    const center = normalizeCenter(options.center);
+    const fuelOverrides = options.fuelOverrides ?? null;
+    return {
+      step: 0,
+      center,
+      fuelOverrides,
+      cells: createInitialFireCells(fuelOverrides)
+    };
+  }
+
+  function resetFireSimulationState(state, options = {}) {
+    state.step = 0;
+    state.center = normalizeCenter(options.center ?? state.center);
+    state.fuelOverrides = options.fuelOverrides ?? null;
+    state.cells = createInitialFireCells(state.fuelOverrides);
+    return state;
+  }
+
+  function advanceFireSimulationState(state, ticks = 1) {
+    const count = Math.max(1, Number(ticks) || 1);
+    for (let i = 0; i < count; i++) {
+      state.step += 1;
+      state.cells = advanceFireCells(state.cells, state.step);
+    }
+    return state;
   }
 
   function dominantFuel(cells) {
@@ -253,7 +269,7 @@
         }
       }
 
-      const wobble = (deterministicNoise(i, cells.length, state.length) - 0.5) * FIRE_GRID.cellKm * 0.2;
+      const wobble = (deterministicNoise(i, cells.length, state.length) - 0.5) * FIRE_GRID.cellKm * 0.18;
       radii.push(Math.max(FIRE_GRID.cellKm * 0.65, radius + wobble));
     }
 
@@ -283,40 +299,35 @@
         intensity: Number(maxIntensity.toFixed(3)),
         cellCount: cells.length
       },
-      geometry: {
-        type: "Polygon",
-        coordinates: [ring]
-      }
+      geometry: { type: "Polygon", coordinates: [ring] }
     };
   }
 
   function buildFireFeatureCollection(cells, center) {
-    const features = [];
     const groups = {
-      heat: cells.filter(cell => cell.state === "heat"),
-      burned: cells.filter(cell => cell.state === "burned"),
-      embers: cells.filter(cell => cell.state === "embers"),
-      active: cells.filter(cell => cell.state === "active")
+      heat: cells.filter(cell => cell.state === STATE.HEAT),
+      burned: cells.filter(cell => cell.state === STATE.BURNED),
+      embers: cells.filter(cell => cell.state === STATE.EMBERS),
+      active: cells.filter(cell => cell.state === STATE.ACTIVE)
     };
-
+    const features = [];
     for (const [state, group] of Object.entries(groups)) {
-      const padding = state === "heat" ? 0.36 : state === "active" ? 0.2 : 0.16;
+      const padding = state === "heat" ? 0.34 : state === "active" ? 0.18 : 0.15;
       const feature = buildSmoothBlobFeature(group, state, center, padding);
       if (feature) features.push(feature);
     }
-
     return { type: "FeatureCollection", features };
   }
 
   function buildFireEmitters(cells, center) {
     return cells
-      .filter(cell => cell.state === "active")
+      .filter(cell => cell.state === STATE.ACTIVE)
       .sort((a, b) => (b.xKm + b.yKm * 0.35) - (a.xKm + a.yKm * 0.35))
-      .slice(0, 24)
+      .slice(0, 34)
       .map((cell, index) => ({
         id: `cell-${cell.x}-${cell.y}`,
         lngLat: localKmToLngLat(center, cell.xKm, cell.yKm),
-        intensity: Math.max(0.32, cell.intensity),
+        intensity: Math.max(0.3, cell.intensity),
         type: index % 4 === 0 ? "ember" : "flame"
       }));
   }
@@ -324,13 +335,11 @@
   function countThreatenedBuildings(cells) {
     return cells.filter(cell => {
       if (cell.fuel !== "urban") return false;
-      if (cell.state !== "unburned") return true;
+      if (cell.state !== STATE.UNBURNED) return true;
       for (let dy = -2; dy <= 2; dy++) {
         for (let dx = -2; dx <= 2; dx++) {
           const neighbor = getCell(cells, cell.x + dx, cell.y + dy);
-          if (neighbor && (neighbor.state === "active" || neighbor.state === "embers" || neighbor.state === "burned" || neighbor.state === "heat")) {
-            return true;
-          }
+          if (neighbor && (neighbor.state === STATE.ACTIVE || neighbor.state === STATE.EMBERS || neighbor.state === STATE.BURNED || neighbor.state === STATE.HEAT)) return true;
         }
       }
       return false;
@@ -338,8 +347,8 @@
   }
 
   function summarizeFireStats(cells) {
-    const affected = cells.filter(cell => cell.state === "active" || cell.state === "embers" || cell.state === "burned");
-    const active = cells.filter(cell => cell.state === "active");
+    const affected = cells.filter(cell => cell.state === STATE.ACTIVE || cell.state === STATE.EMBERS || cell.state === STATE.BURNED);
+    const active = cells.filter(cell => cell.state === STATE.ACTIVE);
     const cellHectares = FIRE_GRID.cellKm * FIRE_GRID.cellKm * 100;
     const fuelImpacts = Object.fromEntries(Object.keys(FUEL_BEHAVIOR).map(fuel => [fuel, 0]));
 
@@ -373,7 +382,7 @@
     const tick = Math.max(0, Number(step) || 0);
     const center = normalizeCenter(options.center);
     const cells = simulateFireCells(tick, options.fuelOverrides);
-    const windSpeed = Math.round(28 + Math.sin(tick * 0.18) * 5);
+    const windSpeed = Math.round(WIND_MODEL.speedKmh + Math.sin(tick * 0.18) * 5);
 
     return {
       step: tick,
@@ -382,6 +391,24 @@
       zones: buildFireFeatureCollection(cells, center),
       emitters: buildFireEmitters(cells, center),
       stats: summarizeFireStats(cells),
+      wind: {
+        direction: WIND_MODEL.direction,
+        degrees: WIND_MODEL.degrees,
+        speedKmh: windSpeed
+      }
+    };
+  }
+
+  function buildFireSimulationFrameFromState(state) {
+    const center = normalizeCenter(state.center);
+    const windSpeed = Math.round(WIND_MODEL.speedKmh + Math.sin(state.step * 0.18) * 5);
+    return {
+      step: state.step,
+      center,
+      cells: state.cells,
+      zones: buildFireFeatureCollection(state.cells, center),
+      emitters: buildFireEmitters(state.cells, center),
+      stats: summarizeFireStats(state.cells),
       wind: {
         direction: WIND_MODEL.direction,
         degrees: WIND_MODEL.degrees,
@@ -405,16 +432,7 @@
 
   function createRenderedFuelOverrides(map, center) {
     if (!map?.queryRenderedFeatures || !map?.project) return null;
-    const queryLayers = [
-      "buildings",
-      "fuel-water",
-      "fuel-mineral",
-      "fuel-forest",
-      "fuel-scrub",
-      "fuel-grass",
-      "fuel-crops",
-      "fuel-urban"
-    ];
+    const queryLayers = ["buildings", "fuel-water", "fuel-mineral", "fuel-forest", "fuel-scrub", "fuel-grass", "fuel-crops", "fuel-urban"];
     const overrides = [];
     let resolved = 0;
 
@@ -424,8 +442,7 @@
           const local = getCellLocalKm(x, y);
           const lngLat = localKmToLngLat(center, local.xKm, local.yKm);
           const point = map.project(lngLat);
-          const features = map.queryRenderedFeatures(point, { layers: queryLayers });
-          const fuel = classifyRenderedFuel(features);
+          const fuel = classifyRenderedFuel(map.queryRenderedFeatures(point, { layers: queryLayers }));
           overrides.push(fuel);
           if (fuel) resolved += 1;
         }
@@ -455,30 +472,21 @@
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "burned"],
-        paint: {
-          "fill-color": FIRE_COLORS.burned,
-          "fill-opacity": 0.76
-        }
+        paint: { "fill-color": FIRE_COLORS.burned, "fill-opacity": 0.76 }
       },
       {
         id: "fire-ember-bed",
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "embers"],
-        paint: {
-          "fill-color": FIRE_COLORS.embers,
-          "fill-opacity": 0.42
-        }
+        paint: { "fill-color": FIRE_COLORS.embers, "fill-opacity": 0.42 }
       },
       {
         id: "fire-active-core",
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "active"],
-        paint: {
-          "fill-color": FIRE_COLORS.active,
-          "fill-opacity": 0.66
-        }
+        paint: { "fill-color": FIRE_COLORS.active, "fill-opacity": 0.66 }
       },
       {
         id: "fire-active-glow",
@@ -532,9 +540,13 @@
     buildFireLayerDefinitions,
     buildFireLegendItems,
     buildFireSimulationFrame,
+    buildFireSimulationFrameFromState,
     buildIgnitionFeatureCollection,
+    createFireSimulationState,
     createRenderedFuelOverrides,
-    localKmToLngLat
+    advanceFireSimulationState,
+    localKmToLngLat,
+    resetFireSimulationState
   };
 
   global.FireLogisticsFire = api;

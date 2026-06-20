@@ -311,11 +311,11 @@
   }
 
   function createFireSimulation(map) {
-    let step = 0;
     let running = true;
     let center = Fire.DEFAULT_FIRE_CENTER;
     let fuelOverrides = null;
-    let frame = Fire.buildFireSimulationFrame(step, { center, fuelOverrides });
+    let state = Fire.createFireSimulationState({ center, fuelOverrides });
+    let frame = Fire.buildFireSimulationFrameFromState(state);
     let lastTick = performance.now();
     const fireSource = map.getSource(Fire.FIRE_SOURCE_ID);
     const ignitionSource = map.getSource(Fire.IGNITION_SOURCE_ID);
@@ -329,21 +329,28 @@
     }
 
     function rebuildFrame() {
-      frame = Fire.buildFireSimulationFrame(step, { center, fuelOverrides });
+      frame = Fire.buildFireSimulationFrameFromState(state);
       publish();
+    }
+
+    function rebuildStateWithFuelOverrides(nextFuelOverrides) {
+      const targetStep = state.step;
+      fuelOverrides = nextFuelOverrides;
+      state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
+      if (targetStep > 0) Fire.advanceFireSimulationState(state, targetStep);
+      rebuildFrame();
     }
 
     function refreshRenderedFuelModel() {
       const renderedOverrides = Fire.createRenderedFuelOverrides(map, center);
       if (!renderedOverrides) return;
-      fuelOverrides = renderedOverrides;
-      rebuildFrame();
+      rebuildStateWithFuelOverrides(renderedOverrides);
     }
 
     function animate(now) {
       if (running && now - lastTick > 720) {
         lastTick = now;
-        step += 1;
+        Fire.advanceFireSimulationState(state);
         rebuildFrame();
       }
       global.requestAnimationFrame(animate);
@@ -364,15 +371,15 @@
         return running;
       },
       reset() {
-        step = 0;
         running = true;
+        state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
         rebuildFrame();
       },
       setIgnitionCenter(lngLat) {
         center = [Number(lngLat[0]), Number(lngLat[1])];
-        step = 0;
         running = true;
         fuelOverrides = null;
+        state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
         rebuildFrame();
         refreshRenderedFuelModel();
         map.once("idle", refreshRenderedFuelModel);
