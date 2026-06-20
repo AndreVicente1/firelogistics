@@ -9,17 +9,18 @@
 </head>
 <body>
   <main id="app">
-    <section id="map" aria-label="Carte stratégique Fire Logistics"></section>
+    <section id="map" aria-label="Carte strategique Fire Logistics"></section>
+    <canvas id="fire-effects" aria-hidden="true"></canvas>
     <aside class="hud" aria-label="Tableau de bord">
       <div class="brand">Fire Logistics</div>
       <div class="status-grid">
         <div>
           <span class="label">Phase</span>
-          <strong>Bootstrap</strong>
+          <strong id="phase-value">Incident</strong>
         </div>
         <div>
           <span class="label">Simulation</span>
-          <strong>En attente</strong>
+          <strong id="simulation-value">Feu actif</strong>
         </div>
         <div>
           <span class="label">Godot FPS</span>
@@ -31,12 +32,41 @@
         </div>
       </div>
       <div class="panel">
-        <h1>Vue stratégique</h1>
-        <p>La carte affiche les combustibles France entière avec relief MapLibre actif, ombrage de pente et terrain exagéré pour la lecture tactique.</p>
+        <h1>Vue strategique</h1>
+        <p>La carte affiche les combustibles, le relief et un premier front de feu tactique avec fumee, braises, lisieres actives et zone deja brulee.</p>
+      </div>
+      <div class="fire-panel">
+        <div class="panel-heading">
+          <h2>Feu de foret</h2>
+          <span id="wind-value" class="pill">Vent E 28 km/h</span>
+        </div>
+        <div id="fire-legend" class="fire-legend" aria-label="Legende feu"></div>
+        <div class="fire-metrics">
+          <div>
+            <span class="label">Surface brulee</span>
+            <strong id="burned-area-value">--</strong>
+          </div>
+          <div>
+            <span class="label">Front actif</span>
+            <strong id="front-length-value">--</strong>
+          </div>
+          <div>
+            <span class="label">Intensite</span>
+            <strong id="intensity-value">--</strong>
+          </div>
+          <div>
+            <span class="label">Bati expose</span>
+            <strong id="building-risk-value">--</strong>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="fire-toggle-button" type="button">Pause feu</button>
+          <button id="fire-reset-button" type="button">Relancer</button>
+        </div>
       </div>
       <div class="fuel-panel">
         <h2>Combustible</h2>
-        <div id="fuel-legend" class="fuel-legend" aria-label="Légende combustible"></div>
+        <div id="fuel-legend" class="fuel-legend" aria-label="Legende combustible"></div>
       </div>
       <div class="actions">
         <button id="diagnostics-button" type="button">Diagnostic</button>

@@ -73,6 +73,82 @@ test("map style enables terrain relief on the cartography", () => {
   assert.ok(layerIds.indexOf("terrain-hillshade") < layerIds.indexOf("buildings"));
 });
 
+test("map style includes tactical wildfire layers above terrain and below roads", () => {
+  const {
+    FIRE_COLORS,
+    FIRE_SOURCE_ID,
+    buildFireLayerDefinitions,
+    buildFranceWorldStyle
+  } = require("../../assets/web/js/app.js");
+
+  const style = buildFranceWorldStyle();
+  const fireLayers = buildFireLayerDefinitions();
+  const layerIds = style.layers.map(layer => layer.id);
+
+  assert.equal(style.sources[FIRE_SOURCE_ID].type, "geojson");
+  assert.ok(style.sources[FIRE_SOURCE_ID].data.features.length > 0);
+  assert.ok(style.sources[FIRE_SOURCE_ID].data.features.every(feature => feature.properties.fuel));
+  assert.deepEqual(fireLayers.map(layer => layer.id), [
+    "fire-heat",
+    "fire-burn-scar",
+    "fire-ember-bed",
+    "fire-active-core",
+    "fire-active-glow",
+    "fire-perimeter"
+  ]);
+  assert.equal(fireLayers.find(layer => layer.id === "fire-active-core").paint["fill-color"], FIRE_COLORS.active);
+  assert.equal(fireLayers.find(layer => layer.id === "fire-burn-scar").paint["fill-color"], FIRE_COLORS.burned);
+
+  const firstFireIndex = layerIds.indexOf("fire-heat");
+  const lastFireIndex = layerIds.indexOf("fire-perimeter");
+  assert.ok(firstFireIndex > layerIds.indexOf("terrain-hillshade"));
+  assert.ok(lastFireIndex < layerIds.indexOf("transportation"));
+  assert.ok(lastFireIndex < layerIds.indexOf("buildings"));
+});
+
+test("wildfire simulation frame expands deterministically", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const initial = buildFireSimulationFrame(0);
+  const later = buildFireSimulationFrame(12);
+
+  assert.equal(initial.zones.type, "FeatureCollection");
+  assert.ok(initial.zones.features.every(feature => feature.properties.fuel));
+  assert.ok(initial.zones.features.some(feature => feature.properties.state === "active"));
+  assert.equal(initial.emitters.length, initial.stats.activeCells);
+  assert.ok(later.stats.burnedHectares > initial.stats.burnedHectares);
+  assert.ok(later.stats.frontKilometers > initial.stats.frontKilometers);
+  assert.ok(later.stats.fuelImpacts.forest > 0);
+  assert.ok(later.stats.fuelImpacts.scrub > 0);
+  assert.equal(later.stats.fuelImpacts.water, 0);
+  assert.equal(later.stats.fuelImpacts.mineral, 0);
+  assert.equal(later.wind.direction, "E-NE");
+});
+
+test("wildfire exposes nearby buildings without making water or mineral burn", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const frame = buildFireSimulationFrame(25);
+  const affectedFuelTypes = new Set(frame.zones.features.map(feature => feature.properties.fuel));
+
+  assert.ok(frame.stats.threatenedBuildings > 0);
+  assert.ok(affectedFuelTypes.has("forest"));
+  assert.ok(affectedFuelTypes.has("scrub"));
+  assert.ok(!affectedFuelTypes.has("water"));
+  assert.ok(!affectedFuelTypes.has("mineral"));
+});
+
+test("wildfire accepts rendered fuel overrides from the map", () => {
+  const { FIRE_GRID, buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+  const waterOverrides = Array.from({ length: FIRE_GRID.width * FIRE_GRID.height }, () => "water");
+
+  const frame = buildFireSimulationFrame(4, { fuelOverrides: waterOverrides });
+
+  assert.equal(frame.stats.burnedHectares, 0);
+  assert.equal(frame.stats.activeCells, 0);
+  assert.equal(frame.zones.features.length, 0);
+});
+
 test("fuel legend exposes all gameplay categories", () => {
   const { buildFuelLegendItems } = require("../../assets/web/js/app.js");
 
@@ -84,5 +160,16 @@ test("fuel legend exposes all gameplay categories", () => {
     "Broussailles",
     "Foret",
     "Urbain"
+  ]);
+});
+
+test("fire legend exposes tactical fire categories", () => {
+  const { buildFireLegendItems } = require("../../assets/web/js/app.js");
+
+  assert.deepEqual(buildFireLegendItems().map(item => item.label), [
+    "Front actif",
+    "Braises",
+    "Zone brulee",
+    "Chaleur"
   ]);
 });
