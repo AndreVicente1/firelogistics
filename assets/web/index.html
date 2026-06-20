@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fire Logistics</title>
+  <link rel="stylesheet" href="vendor/maplibre-gl@4.7.1/maplibre-gl.css">
+  <link rel="stylesheet" href="css/game.css">
+</head>
+<body>
+  <main id="app">
+    <section id="map" aria-label="Carte stratégique Fire Logistics"></section>
+    <aside class="hud" aria-label="Tableau de bord">
+      <div class="brand">Fire Logistics</div>
+      <div class="status-grid">
+        <div>
+          <span class="label">Phase</span>
+          <strong>Bootstrap</strong>
+        </div>
+        <div>
+          <span class="label">Simulation</span>
+          <strong>En attente</strong>
+        </div>
+        <div>
+          <span class="label">Godot FPS</span>
+          <strong id="fps-value">--</strong>
+        </div>
+        <div>
+          <span class="label">RAM</span>
+          <strong id="ram-value">--</strong>
+        </div>
+      </div>
+      <div class="panel">
+        <h1>Vue stratégique</h1>
+        <p>MapLibre est chargé dans la WebView. La scène tactique 3D native est rendue par Godot derrière cette interface.</p>
+      </div>
+      <div class="actions">
+        <button id="diagnostics-button" type="button">Diagnostic</button>
+        <button id="quit-button" type="button">Quitter</button>
+      </div>
+    </aside>
+  </main>
+  <script src="vendor/maplibre-gl@4.7.1/maplibre-gl.js"></script>
+  <script src="vendor/pmtiles@4.4.1/pmtiles.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

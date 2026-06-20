@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if command -v cmd.exe >/dev/null 2>&1; then
+  if command -v cygpath >/dev/null 2>&1; then
+    win_script=$(cygpath -w "$script_dir/run.bat")
+  else
+    win_script="$script_dir/run.bat"
+  fi
+  exec cmd.exe /c "$win_script" "$@"
+fi
+
+exec "$script_dir/run.bat" "$@"

@@ -1,0 +1,228 @@
+(function (global) {
+  function sendToGodot(action, payload) {
+    const message = JSON.stringify({ action, payload });
+    if (global.godot?.ipc) {
+      global.godot.ipc.postMessage(message);
+      return;
+    }
+
+    if (global.GodotBridge?.postMessage) {
+      global.GodotBridge.postMessage(message);
+      return;
+    }
+
+    console.info("[FireLogistics bridge fallback]", message);
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    if (value <= 0) return "--";
+    const units = ["B", "KB", "MB", "GB"];
+    let unit = 0;
+    let amount = value;
+    while (amount >= 1024 && unit < units.length - 1) {
+      amount /= 1024;
+      unit++;
+    }
+    return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  }
+
+  function buildFranceWorldStyle() {
+    return {
+      version: 8,
+      name: "Fire Logistics France",
+      glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+      sources: {
+        "world-backdrop": {
+          type: "geojson",
+          data: "data/world-backdrop.geojson"
+        },
+        france: {
+          type: "vector",
+          url: "pmtiles://data/france-openmaptiles.pmtiles"
+        }
+      },
+      layers: [
+        {
+          id: "background",
+          type: "background",
+          paint: { "background-color": "#0f1413" }
+        },
+        {
+          id: "world-backdrop-water",
+          type: "fill",
+          source: "world-backdrop",
+          filter: ["==", ["get", "kind"], "water"],
+          paint: {
+            "fill-color": "#101c24",
+            "fill-opacity": 0.95
+          }
+        },
+        {
+          id: "world-backdrop-land",
+          type: "fill",
+          source: "world-backdrop",
+          filter: ["==", ["get", "kind"], "land"],
+          paint: {
+            "fill-color": "#151b18",
+            "fill-opacity": 0.92
+          }
+        },
+        {
+          id: "landcover",
+          type: "fill",
+          source: "france",
+          "source-layer": "landcover",
+          paint: {
+            "fill-color": "#151b18",
+            "fill-opacity": ["interpolate", ["linear"], ["zoom"], 2, 0.12, 4, 0.28, 6, 0.55, 8, 0.7]
+          }
+        },
+        {
+          id: "landuse",
+          type: "fill",
+          source: "france",
+          "source-layer": "landuse",
+          paint: {
+            "fill-color": "#1a211d",
+            "fill-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.15, 6, 0.4, 8, 0.82]
+          }
+        },
+        {
+          id: "parks",
+          type: "fill",
+          source: "france",
+          "source-layer": "park",
+          paint: { "fill-color": "#1c2a20", "fill-opacity": 0.78 }
+        },
+        {
+          id: "water",
+          type: "fill",
+          source: "france",
+          "source-layer": "water",
+          paint: { "fill-color": "#101c24", "fill-opacity": 0.95 }
+        },
+        {
+          id: "waterways",
+          type: "line",
+          source: "france",
+          "source-layer": "waterway",
+          paint: {
+            "line-color": "#173245",
+            "line-opacity": 0.9,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 13, 1.6, 16, 4]
+          }
+        },
+        {
+          id: "transportation",
+          type: "line",
+          source: "france",
+          "source-layer": "transportation",
+          paint: {
+            "line-color": "#46554f",
+            "line-opacity": 0.88,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.45, 10, 1.2, 13, 2.8, 16, 8]
+          }
+        },
+        {
+          id: "buildings",
+          type: "fill",
+          source: "france",
+          "source-layer": "building",
+          minzoom: 13,
+          paint: { "fill-color": "#222c28", "fill-opacity": 0.88 }
+        }
+      ]
+    };
+  }
+
+  function initMap() {
+    if (!global.maplibregl) {
+      document.getElementById("map").textContent = "MapLibre indisponible";
+      return null;
+    }
+
+    if (global.pmtiles) {
+      const protocol = new global.pmtiles.Protocol();
+      global.maplibregl.addProtocol("pmtiles", protocol.tile);
+    }
+
+    const map = new global.maplibregl.Map({
+      container: "map",
+      center: [2.35, 46.8],
+      zoom: 5.2,
+      minZoom: 1.5,
+      maxZoom: 18,
+      style: buildFranceWorldStyle(),
+      renderWorldCopies: false,
+      attributionControl: false
+    });
+
+    map.addControl(new global.maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
+    map.on("load", () => {
+      map.addSource("bootstrap-incident", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { name: "Incident test" },
+              geometry: { type: "Point", coordinates: [5.38, 43.3] }
+            }
+          ]
+        }
+      });
+      map.addLayer({
+        id: "bootstrap-incident",
+        type: "circle",
+        source: "bootstrap-incident",
+        paint: {
+          "circle-radius": 8,
+          "circle-color": "#ff5a1f",
+          "circle-stroke-color": "#fff2df",
+          "circle-stroke-width": 2
+        }
+      });
+    });
+    map.on("error", (event) => {
+      const message = event?.error?.message ?? "";
+      if (message.includes("france-openmaptiles.pmtiles")) {
+        console.error("Carte France absente: assets/web/data/france-openmaptiles.pmtiles");
+      } else if (message.includes("world-backdrop.geojson")) {
+        console.error("Fond monde absent: assets/web/data/world-backdrop.geojson");
+      } else if (message) {
+        console.error("[MapLibre]", message);
+      }
+    });
+
+    return map;
+  }
+
+  const api = {
+    map: null,
+    sendToGodot,
+    updateRuntimeMetrics(metrics) {
+      document.getElementById("fps-value").textContent = String(metrics?.fps ?? "--");
+      document.getElementById("ram-value").textContent = formatBytes(metrics?.ramBytes);
+    }
+  };
+
+  global.FireLogistics = api;
+
+  if (typeof global.addEventListener === "function" && global.document) {
+    global.addEventListener("DOMContentLoaded", () => {
+      api.map = initMap();
+      document.getElementById("diagnostics-button").addEventListener("click", () => {
+        sendToGodot("diagnostics_log", "Diagnostic WebView Fire Logistics OK");
+      });
+      document.getElementById("quit-button").addEventListener("click", () => {
+        sendToGodot("quit_game", null);
+      });
+    });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { buildFranceWorldStyle, formatBytes };
+  }
+})(typeof window !== "undefined" ? window : globalThis);
