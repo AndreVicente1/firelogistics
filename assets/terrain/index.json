@@ -1,0 +1,33 @@
+{
+  "format": "FireLogisticsTerrainIndex",
+  "version": 1,
+  "source": "procedural-demo-until-ign-download",
+  "downloadBudgetGb": 50,
+  "verticalScale": 2.5,
+  "maxVerticalScale": 2.5,
+  "renderMetersToGodotUnit": 0.025,
+  "chunks": [
+    {
+      "id": "marseille-demo",
+      "lod": "demo",
+      "path": "chunks/demo/marseille-demo.flht",
+      "sourceResolutionMeters": 25,
+      "width": 65,
+      "height": 65
+    }
+  ],
+  "plannedSources": [
+    {
+      "name": "BD ALTI",
+      "use": "Relief national leger France entiere, cible 25 m sous budget."
+    },
+    {
+      "name": "RGE ALTI",
+      "use": "Relief plus precis 5 m ou 1 m selon poids confirme par paquets."
+    },
+    {
+      "name": "MNT LiDAR HD",
+      "use": "Reference tres precise pour zones pilotes uniquement, hors budget national."
+    }
+  ]
+}

@@ -366,6 +366,77 @@ Le projet initial sera considéré correctement cadré quand :
 - Ne pas lancer de traitement national lourd sans commande explicite.
 - Le jeu doit démarrer même si les données OSO ne sont pas disponibles, avec un avertissement clair et la couche végétation désactivée.
 
+## Relief 3D sous budget 50 Go
+
+Le relief 3D utilise une stratégie multi-source pour rester sous un budget strict de **50 Go de téléchargement**.
+
+Choix initial :
+
+- **France entière** : BD ALTI 25 m en priorité, ou RGE ALTI 5 m seulement si le poids réel des paquets reste sous budget après inspection.
+- **Zones tactiques** : RGE ALTI 1 m uniquement sur zones pilotes à fort intérêt incendie, par exemple Bouches-du-Rhône, Var, Alpes-Maritimes ou Corse.
+- **LiDAR HD / 50 cm** : source trop lourde pour la France entière, réservée à des comparaisons ou à de très petites zones.
+
+Le rendu Godot applique une exagération verticale de `1.8x` par défaut, avec une limite prévue à `2.5x` pour améliorer la lisibilité. Les altitudes source restent stockées en mètres réels ; l'exagération ne touche que le mesh affiché.
+
+La cartographie MapLibre utilise maintenant aussi un relief local :
+
+- source DEM `raster-dem` locale `assets/web/data/terrain-dem/tilejson.json`;
+- terrain MapLibre actif avec exagération `2.2x`;
+- couche `terrain-hillshade` placée au-dessus des combustibles et sous les routes/bâtiments.
+
+Les tuiles actuelles sont générées depuis **BD ALTI 25 m France métropolitaine** téléchargé localement dans `data-sources/terrain/`. Sur cette machine, le téléchargement du COG de 1,30 Go a pris environ 2 min 34 s et la génération propre du zoom 8 a pris environ 2 min 38 s.
+
+Le DEM local est volontairement limité au zoom 8 pour éviter l'ancien artefact de grand rectangle visible aux bas zooms. Les pixels hors emprise BD ALTI sont encodés à `0 m`, afin de garder la mer plate.
+
+Fichiers ajoutés :
+
+```text
+tools/terrain-builder/inspect_sources.py
+tools/terrain-builder/write_demo_chunk.py
+tools/terrain-builder/README.md
+assets/terrain/index.json
+assets/terrain/chunks/demo/marseille-demo.flht
+```
+
+Inspection des paquets avant téléchargement :
+
+```powershell
+python tools/terrain-builder/inspect_sources.py --max-download-gb 50
+python tools/terrain-builder/inspect_sources.py --dataset bd_alti --skip-datagouv-services --max-download-gb 50
+python tools/terrain-builder/inspect_sources.py --dataset rge_alti --keyword 13 --max-download-gb 50
+```
+
+Le script ne télécharge rien. Il lit les métadonnées data.gouv, additionne les tailles connues et signale les ressources dont la taille n'est pas publiée. Les ressources à taille inconnue ne doivent pas être lancées en batch sans validation manuelle.
+
+Premier paquet recommandé identifié par l'API officielle Géoplateforme :
+
+```text
+BD ALTI 25 m COG France métropolitaine
+URL : https://data.geopf.fr/telechargement/download/archive_BDALTI_COG/archive/MNT_FRANCE-BDALTI_25M_L93_lzw.COG.TIF
+Poids annoncé : 1,30 Go
+```
+
+Génération locale utilisée :
+
+```powershell
+node tools/terrain-builder/build_bdalti_terrarium_tiles.mjs `
+  --input data-sources/terrain/MNT_FRANCE-BDALTI_25M_L93_lzw.COG.TIF `
+  --output assets/web/data/terrain-dem `
+  --min-zoom 8 `
+  --max-zoom 8
+```
+
+Le runtime ne dépend plus de la source DEM en ligne utilisée temporairement au prototype.
+
+Le format de chunk `.flht` est volontairement minimal et versionné :
+
+- en-tête `FLHT`, version `1`;
+- largeur, hauteur, taille de cellule, origine locale;
+- altitude min/max;
+- tableau `float32` des altitudes en mètres source.
+
+Le chunk présent dans `assets/terrain/chunks/demo/` est un relief procédural de validation. Il n'est pas une donnée IGN. Les futurs chunks IGN lourds iront dans `assets/terrain/chunks/ign/`, `national/` ou `pilot/`, qui sont exclus de Git.
+
 ## Statut
 
-Scaffold initial implémenté. Le dépôt compile, les tests Core/Web bootstrap passent, Godot démarre en headless avec une scène 3D placeholder, et la WebView charge le style France PMTiles local avec fond monde et couche combustible permanente. Les systèmes de feu, végétation OSO fine, routage opérationnel, unités et gameplay restent à implémenter.
+Scaffold initial implémenté. Le dépôt compile, les tests Core/Web bootstrap passent, Godot démarre en headless avec une scène 3D terrain heightfield, et la WebView charge le style France PMTiles local avec fond monde et couche combustible permanente. Les systèmes de feu, végétation OSO fine, relief IGN réel, routage opérationnel, unités et gameplay restent à implémenter.

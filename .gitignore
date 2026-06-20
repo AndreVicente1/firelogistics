@@ -5,15 +5,22 @@ obj/
 /export/
 /scratch/
 /scripts/node_modules/
+/tools/terrain-builder/node_modules/
 
 /OSO_20230101_RASTER.tar.gz
 /.cache/vegetation/
 /data-sources/vegetation/
 /assets/web/data/vegetation/
+/.cache/terrain/
+/data-sources/terrain/
+/assets/terrain/chunks/ign/
+/assets/terrain/chunks/national/
+/assets/terrain/chunks/pilot/
 /assets/web/data/*.pmtiles
 /assets/web/data/*.pbf
 /assets/web/data/*road-graph*.bin
 /assets/web/data/world-backdrop.geojson
+/assets/web/data/terrain-dem/[0-9]*/
 
 export_presets.cfg
 *.user

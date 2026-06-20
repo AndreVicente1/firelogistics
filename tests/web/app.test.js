@@ -48,6 +48,31 @@ test("map style includes permanent fuel layers before roads and buildings", () =
   assert.ok(lastFuelIndex < layerIds.indexOf("buildings"));
 });
 
+test("map style enables terrain relief on the cartography", () => {
+  const {
+    TERRAIN_EXAGGERATION,
+    TERRAIN_SOURCE_ID,
+    buildFranceWorldStyle,
+    buildTerrainLayerDefinition,
+    buildTerrainSourceDefinition
+  } = require("../../assets/web/js/app.js");
+
+  const style = buildFranceWorldStyle();
+  const layerIds = style.layers.map(layer => layer.id);
+
+  assert.equal(TERRAIN_SOURCE_ID, "terrain-dem");
+  assert.equal(style.sources[TERRAIN_SOURCE_ID].type, "raster-dem");
+  assert.equal(style.sources[TERRAIN_SOURCE_ID].url, "data/terrain-dem/tilejson.json");
+  assert.ok(!style.sources[TERRAIN_SOURCE_ID].url.startsWith("http"));
+  assert.equal(style.sources[TERRAIN_SOURCE_ID].url, buildTerrainSourceDefinition().url);
+  assert.equal(style.terrain.source, TERRAIN_SOURCE_ID);
+  assert.equal(style.terrain.exaggeration, TERRAIN_EXAGGERATION);
+  assert.equal(buildTerrainLayerDefinition().type, "hillshade");
+  assert.ok(layerIds.indexOf("terrain-hillshade") > layerIds.indexOf("fuel-forest"));
+  assert.ok(layerIds.indexOf("terrain-hillshade") < layerIds.indexOf("transportation"));
+  assert.ok(layerIds.indexOf("terrain-hillshade") < layerIds.indexOf("buildings"));
+});
+
 test("fuel legend exposes all gameplay categories", () => {
   const { buildFuelLegendItems } = require("../../assets/web/js/app.js");
 

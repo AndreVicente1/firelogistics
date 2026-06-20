@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "geotiff": "^3.0.5",
+    "pngjs": "^7.0.0",
+    "proj4": "^2.20.9"
+  }
+}

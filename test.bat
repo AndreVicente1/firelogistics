@@ -25,7 +25,7 @@ if errorlevel 1 (
 ) else (
     echo.
     echo Running web helper tests...
-    node --test tests\web\app.test.js
+    node --test tests\web\app.test.js tests\web\terrain-dem.test.js
     if errorlevel 1 exit /b 1
 )
 

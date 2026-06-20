@@ -1,0 +1,24 @@
+{
+  "tilejson": "3.0.0",
+  "name": "Fire Logistics BD ALTI DEM local",
+  "scheme": "xyz",
+  "tiles": [
+    "data/terrain-dem/{z}/{x}/{y}.png"
+  ],
+  "bounds": [
+    -6,
+    41,
+    10.2,
+    52.2
+  ],
+  "center": [
+    2.35,
+    46.8,
+    6
+  ],
+  "minzoom": 8,
+  "maxzoom": 10,
+  "tileSize": 256,
+  "encoding": "terrarium",
+  "attribution": "IGN BD ALTI local"
+}

@@ -19,6 +19,10 @@
     { id: "urban", label: "Urbain", color: FUEL_COLORS.urban }
   ];
 
+  const TERRAIN_SOURCE_ID = "terrain-dem";
+  const TERRAIN_EXAGGERATION = 1.35;
+  const TERRAIN_TILEJSON_URL = "data/terrain-dem/tilejson.json";
+
   function sendToGodot(action, payload) {
     const message = JSON.stringify({ action, payload });
     if (global.godot?.ipc) {
@@ -134,6 +138,27 @@
 
   function buildFuelLegendItems() {
     return FUEL_LEGEND_ITEMS.map(item => ({ ...item }));
+  }
+
+  function buildTerrainSourceDefinition() {
+    return {
+      type: "raster-dem",
+      url: TERRAIN_TILEJSON_URL
+    };
+  }
+
+  function buildTerrainLayerDefinition() {
+    return {
+      id: "terrain-hillshade",
+      type: "hillshade",
+      source: TERRAIN_SOURCE_ID,
+      paint: {
+        "hillshade-exaggeration": 0.45,
+        "hillshade-shadow-color": "#08100d",
+        "hillshade-highlight-color": "#d9d2aa",
+        "hillshade-accent-color": "#5d634e"
+      }
+    };
   }
 
   function renderFuelLegend() {
@@ -254,10 +279,39 @@
         france: {
           type: "vector",
           url: "pmtiles://data/france-openmaptiles.pmtiles"
-        }
+        },
+        [TERRAIN_SOURCE_ID]: buildTerrainSourceDefinition()
       },
-      layers: [...baseLayers, ...buildFuelLayerDefinitions(), ...overlayLayers]
+      terrain: {
+        source: TERRAIN_SOURCE_ID,
+        exaggeration: TERRAIN_EXAGGERATION
+      },
+      sky: {
+        "atmosphere-blend": 0.12
+      },
+      layers: [
+        ...baseLayers,
+        ...buildFuelLayerDefinitions(),
+        buildTerrainLayerDefinition(),
+        ...overlayLayers
+      ]
     };
+  }
+
+  function applyTerrainRuntime(map) {
+    if (typeof map.setTerrain === "function") {
+      map.setTerrain({
+        source: TERRAIN_SOURCE_ID,
+        exaggeration: TERRAIN_EXAGGERATION
+      });
+    }
+
+    if (global.maplibregl?.TerrainControl) {
+      map.addControl(new global.maplibregl.TerrainControl({
+        source: TERRAIN_SOURCE_ID,
+        exaggeration: TERRAIN_EXAGGERATION
+      }), "bottom-right");
+    }
   }
 
   function initMap() {
@@ -275,15 +329,19 @@
       container: "map",
       center: [2.35, 46.8],
       zoom: 5.2,
+      pitch: 62,
+      bearing: -18,
       minZoom: 1.5,
       maxZoom: 18,
+      maxPitch: 85,
       style: buildFranceWorldStyle(),
       renderWorldCopies: false,
       attributionControl: false
     });
 
-    map.addControl(new global.maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
+    map.addControl(new global.maplibregl.NavigationControl({ visualizePitch: true, showCompass: true }), "bottom-right");
     map.on("load", () => {
+      applyTerrainRuntime(map);
       map.addSource("bootstrap-incident", {
         type: "geojson",
         data: {
@@ -315,6 +373,8 @@
         console.error("Carte France absente: assets/web/data/france-openmaptiles.pmtiles");
       } else if (message.includes("world-backdrop.geojson")) {
         console.error("Fond monde absent: assets/web/data/world-backdrop.geojson");
+      } else if (message.includes("terrain-dem")) {
+        console.error("Relief DEM indisponible: " + TERRAIN_TILEJSON_URL);
       } else if (message) {
         console.error("[MapLibre]", message);
       }
@@ -350,9 +410,13 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       FUEL_COLORS,
+      TERRAIN_EXAGGERATION,
+      TERRAIN_SOURCE_ID,
       buildFranceWorldStyle,
       buildFuelLayerDefinitions,
       buildFuelLegendItems,
+      buildTerrainLayerDefinition,
+      buildTerrainSourceDefinition,
       formatBytes
     };
   }
