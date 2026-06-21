@@ -590,14 +590,6 @@
       if (!hasIgnition) return;
 
       if (usesCoreSimulation) {
-        const sample = createRenderedFuelSample(map, center, {
-          originX: -64,
-          originY: -48,
-          width: 129,
-          height: 97,
-          cellKm: Fire.FIRE_GRID.cellKm
-        });
-        if (sample) sendToGodot("fire_fuel_overrides_ready", sample);
         return;
       }
 
@@ -813,6 +805,22 @@
     return { originX, originY, width, height, cellKm, fuels };
   }
 
+  function createMapFpsTracker(map) {
+    let frameCount = 0;
+    let lastSampleAt = performance.now();
+    map.on("render", () => {
+      frameCount += 1;
+    });
+    global.setInterval(() => {
+      const now = performance.now();
+      const elapsedMs = Math.max(1, now - lastSampleAt);
+      const fps = Math.round((frameCount * 1000) / elapsedMs);
+      frameCount = 0;
+      lastSampleAt = now;
+      setText("map-fps-value", String(fps));
+    }, 500);
+  }
+
   function initMap() {
     if (!global.maplibregl) {
       document.getElementById("map").textContent = "MapLibre indisponible";
@@ -862,6 +870,7 @@
       }
     });
 
+    createMapFpsTracker(map);
     return map;
   }
 

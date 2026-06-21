@@ -83,13 +83,17 @@ C# can ask the browser to resample rendered fuels around the moving front by eva
 window.FireLogistics.requestFuelSample({ originX, originY, width, height, cellKm })
 ```
 
+The sample window is dynamic: C# sizes it from the live fire front plus margin and recenters as the incident grows. The browser must not send fixed-size fuel samples while connected to Godot.
+
 C# publishes runtime metrics by evaluating:
 
 ```js
 window.FireLogistics.updateRuntimeMetrics({ fps, ramBytes })
 ```
 
-`fps` is an integer. `ramBytes` is the current process working set in bytes.
+`fps` is the Godot engine frame rate. `ramBytes` is the working set of the Godot process tree in bytes, including WebView2 child processes when present.
+
+The browser computes MapLibre cartography FPS locally from `map.on("render")` and displays it in the HUD as `Carte FPS`.
 
 ## Required Web Assets
 

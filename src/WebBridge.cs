@@ -85,7 +85,7 @@ public partial class WebBridge : Node
         }
 
         int fps = (int)Engine.GetFramesPerSecond();
-        long ramBytes = ProcessTreeMemory.GetCurrentProcessWorkingSetBytes();
+        long ramBytes = ProcessTreeMemory.GetProcessTreeWorkingSetBytes();
         string payload = JsonSerializer.Serialize(new { fps, ramBytes });
         _webView.Call("eval", $"if(window.FireLogistics?.updateRuntimeMetrics) window.FireLogistics.updateRuntimeMetrics({payload});");
     }

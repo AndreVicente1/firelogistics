@@ -7,9 +7,11 @@ public sealed class FireRuntimeController
 {
     private const double DefaultLongitude = 5.38;
     private const double DefaultLatitude = 43.3;
-    private const int SampleWidth = 129;
-    private const int SampleHeight = 97;
-    private const int SampleMargin = 14;
+    private const int MinSampleWidth = 129;
+    private const int MinSampleHeight = 97;
+    private const int MaxSampleWidth = 512;
+    private const int MaxSampleHeight = 512;
+    private const int SampleMargin = 32;
     private FireSimulationState _state = FireSimulator.Create(DefaultLongitude, DefaultLatitude, igniteOnStart: false);
     private int? _sampleOriginX;
     private int? _sampleOriginY;
@@ -120,10 +122,22 @@ public sealed class FireRuntimeController
         IReadOnlyDictionary<FireGridCoordinate, FuelType> fuelOverrides)
     {
         string before = BuildVisibleSignature();
-        _sampleOriginX = originX;
-        _sampleOriginY = originY;
-        _sampleWidth = width;
-        _sampleHeight = height;
+        int nextOriginX = _sampleOriginX.HasValue && _sampleWidth.HasValue
+            ? Math.Min(_sampleOriginX.Value, originX)
+            : originX;
+        int nextOriginY = _sampleOriginY.HasValue && _sampleHeight.HasValue
+            ? Math.Min(_sampleOriginY.Value, originY)
+            : originY;
+        int nextWidth = _sampleOriginX.HasValue && _sampleWidth.HasValue
+            ? Math.Max(_sampleOriginX.Value + _sampleWidth.Value, originX + width) - nextOriginX
+            : width;
+        int nextHeight = _sampleOriginY.HasValue && _sampleHeight.HasValue
+            ? Math.Max(_sampleOriginY.Value + _sampleHeight.Value, originY + height) - nextOriginY
+            : height;
+        _sampleOriginX = nextOriginX;
+        _sampleOriginY = nextOriginY;
+        _sampleWidth = nextWidth;
+        _sampleHeight = nextHeight;
         _sampleRequestPending = false;
         _state.ApplyFuelOverrides(fuelOverrides);
         Running = Running && _state.IsAlive;
@@ -180,16 +194,32 @@ public sealed class FireRuntimeController
 
     private FireFuelSampleRequest BuildFuelSampleRequest()
     {
-        List<FireCell> liveCells = _state.Cells.Values
+        List<FireCell> frontCells = _state.Cells.Values
             .Where(cell => cell.State is FireCellState.Active or FireCellState.Heat or FireCellState.Embers)
             .ToList();
-        int centerX = liveCells.Count == 0 ? 0 : (int)Math.Round(liveCells.Average(cell => cell.Coordinate.X));
-        int centerY = liveCells.Count == 0 ? 0 : (int)Math.Round(liveCells.Average(cell => cell.Coordinate.Y));
+        if (frontCells.Count == 0)
+        {
+            return new FireFuelSampleRequest(
+                -MinSampleWidth / 2,
+                -MinSampleHeight / 2,
+                MinSampleWidth,
+                MinSampleHeight,
+                _state.Environment.CellKm);
+        }
+
+        int minX = frontCells.Min(cell => cell.Coordinate.X) - SampleMargin;
+        int maxX = frontCells.Max(cell => cell.Coordinate.X) + SampleMargin;
+        int minY = frontCells.Min(cell => cell.Coordinate.Y) - SampleMargin;
+        int maxY = frontCells.Max(cell => cell.Coordinate.Y) + SampleMargin;
+        int width = Math.Clamp(maxX - minX + 1, MinSampleWidth, MaxSampleWidth);
+        int height = Math.Clamp(maxY - minY + 1, MinSampleHeight, MaxSampleHeight);
+        int centerX = (minX + maxX) / 2;
+        int centerY = (minY + maxY) / 2;
         return new FireFuelSampleRequest(
-            centerX - SampleWidth / 2,
-            centerY - SampleHeight / 2,
-            SampleWidth,
-            SampleHeight,
+            centerX - width / 2,
+            centerY - height / 2,
+            width,
+            height,
             _state.Environment.CellKm);
     }
 
