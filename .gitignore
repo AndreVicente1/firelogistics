@@ -6,6 +6,7 @@ obj/
 /scratch/
 /scripts/node_modules/
 /tools/terrain-builder/node_modules/
+/assets/web/node_modules/
 
 /OSO_20230101_RASTER.tar.gz
 /.cache/vegetation/

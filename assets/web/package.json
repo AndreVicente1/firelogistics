@@ -1,0 +1,13 @@
+{
+  "name": "firelogistics-web",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test ../../tests/web/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

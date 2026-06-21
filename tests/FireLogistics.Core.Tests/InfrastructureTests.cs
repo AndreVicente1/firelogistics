@@ -1,3 +1,4 @@
+using FireLogistics.Core.Bridge;
 using FireLogistics.Core.Infrastructure;
 using Xunit;
 
@@ -25,19 +26,44 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
-    public void LocalWebServerRejectsPathTraversal()
+    public void ExportedRuntimePathsReturnsNullWhenBundledWebRootIsMissing()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "FireLogistics_PathTest_" + Guid.NewGuid());
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            string? resolved = ExportedRuntimePaths.TryResolveBundledWebRoot(tempRoot);
+
+            Assert.Null(resolved);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LocalWebServerRejectsPathTraversal()
     {
         string root = Path.Combine(Path.GetTempPath(), "FireLogistics_WebRoot_" + Guid.NewGuid());
+        string secret = Path.Combine(Path.GetTempPath(), "FireLogistics_Secret_" + Guid.NewGuid() + ".txt");
         Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(secret, "outside root");
 
         try
         {
             using var server = new LocalWebServer(root);
-            Assert.StartsWith("http://127.0.0.1:", server.BaseUrl, StringComparison.Ordinal);
+            using var client = new HttpClient();
+
+            using HttpResponseMessage response = await client.GetAsync(server.BaseUrl + "%2e%2e%2f" + Path.GetFileName(secret));
+
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
         }
         finally
         {
             Directory.Delete(root, recursive: true);
+            File.Delete(secret);
         }
     }
 
@@ -67,5 +93,28 @@ public sealed class InfrastructureTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void WebIpcMessageRejectsInvalidPayloadsWithoutThrowing()
+    {
+        Assert.False(WebIpcMessage.TryParse("not json", out WebIpcMessage? invalidJson));
+        Assert.Null(invalidJson);
+
+        Assert.False(WebIpcMessage.TryParse("""{"payload":"missing action"}""", out WebIpcMessage? missingAction));
+        Assert.Null(missingAction);
+    }
+
+    [Fact]
+    public void WebIpcMessageParsesActionAndStringPayload()
+    {
+        bool parsed = WebIpcMessage.TryParse(
+            """{"action":"diagnostics_log","payload":"Diagnostic WebView Fire Logistics OK"}""",
+            out WebIpcMessage? message);
+
+        Assert.True(parsed);
+        Assert.NotNull(message);
+        Assert.Equal("diagnostics_log", message.Action);
+        Assert.Equal("Diagnostic WebView Fire Logistics OK", message.PayloadAsString());
     }
 }

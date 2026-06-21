@@ -24,8 +24,29 @@ if errorlevel 1 (
     echo WARNING: node.exe is required for web tests. Skipping web tests.
 ) else (
     echo.
+    echo Building web TypeScript...
+    if not exist "assets\web\node_modules\typescript" (
+        pushd "assets\web" || exit /b 1
+        call npm ci
+        if errorlevel 1 exit /b 1
+        popd
+    )
+    pushd "assets\web" || exit /b 1
+    call npm run build
+    if errorlevel 1 exit /b 1
+    popd
+
+    echo.
     echo Running web helper tests...
-    node --test tests\web\app.test.js tests\web\terrain-dem.test.js
+    node --test tests\web\app.test.js tests\web\terrain-dem.test.js tests\web\contracts.test.js
+    if errorlevel 1 exit /b 1
+)
+
+where powershell.exe >nul 2>nul
+if not errorlevel 1 (
+    echo.
+    echo Checking repository contracts...
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\quality\check_repo_contracts.ps1
     if errorlevel 1 exit /b 1
 )
 
