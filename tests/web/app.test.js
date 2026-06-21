@@ -90,10 +90,10 @@ test("map style includes tactical wildfire layers above terrain and below roads"
   assert.ok(style.sources[FIRE_SOURCE_ID].data.features.every(feature => feature.properties.fuel));
   assert.deepEqual(fireLayers.map(layer => layer.id), [
     "fire-heat",
-    "fire-burn-scar",
-    "fire-ember-bed",
     "fire-active-core",
     "fire-active-glow",
+    "fire-ember-bed",
+    "fire-burn-scar",
     "fire-perimeter",
     "wildfire-ignition"
   ]);

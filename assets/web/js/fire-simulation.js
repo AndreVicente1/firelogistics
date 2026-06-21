@@ -198,7 +198,7 @@
   }
 
   function simulateFireCells(step, fuelOverrides) {
-    const maxStep = Math.min(160, Math.max(0, Number(step) || 0));
+    const maxStep = Math.max(0, Number(step) || 0);
     let cells = createInitialFireCells(fuelOverrides);
     for (let tick = 1; tick <= maxStep; tick++) {
       cells = advanceFireCells(cells, tick);
@@ -240,23 +240,35 @@
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
   }
 
-  function buildSmoothBlobFeature(cells, state, center, radiusPaddingKm) {
-    if (!cells.length) return null;
-    const centroid = cells.reduce((acc, cell) => {
-      acc.xKm += cell.xKm;
-      acc.yKm += cell.yKm;
-      return acc;
-    }, { xKm: 0, yKm: 0 });
-    centroid.xKm /= cells.length;
-    centroid.yKm /= cells.length;
+  const BLOB_POINT_COUNT = 96;
 
-    const pointCount = 96;
+  function median(values) {
+    if (!values.length) return 0;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  function buildSmoothBlobShape(cells, state, centroidOverride) {
+    if (!cells.length) return null;
+    let centroid = centroidOverride;
+    if (!centroid) {
+      centroid = cells.reduce((acc, cell) => {
+        acc.xKm += cell.xKm;
+        acc.yKm += cell.yKm;
+        return acc;
+      }, { xKm: 0, yKm: 0 });
+      centroid.xKm /= cells.length;
+      centroid.yKm /= cells.length;
+    }
+
+    const pointCount = BLOB_POINT_COUNT;
     const radii = [];
     for (let i = 0; i < pointCount; i++) {
       const angle = (i / pointCount) * Math.PI * 2;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      let radius = FIRE_GRID.cellKm * (1.05 + radiusPaddingKm);
+      let radius = FIRE_GRID.cellKm * 1.05;
 
       for (const cell of cells) {
         const dx = cell.xKm - centroid.xKm;
@@ -265,7 +277,7 @@
         const perpendicular = Math.abs(-dx * sin + dy * cos);
         if (projection > -FIRE_GRID.cellKm) {
           const influence = projection + Math.max(0, FIRE_GRID.cellKm * 0.9 - perpendicular * 0.35);
-          radius = Math.max(radius, influence + radiusPaddingKm);
+          radius = Math.max(radius, influence);
         }
       }
 
@@ -283,11 +295,35 @@
       for (let i = 0; i < pointCount; i++) radii[i] = smoothed[i];
     }
 
+    return { centroid, radii };
+  }
+
+  function ringFromRadii(center, centroid, radii) {
+    const pointCount = radii.length;
     const ring = radii.map((radius, i) => {
       const angle = (i / pointCount) * Math.PI * 2;
       return localKmToLngLat(center, centroid.xKm + Math.cos(angle) * radius, centroid.yKm + Math.sin(angle) * radius);
     });
     ring.push(ring[0]);
+    return ring;
+  }
+
+  function buildSmoothBlobFeature(cells, state, center, radiusPaddingKm, innerCells) {
+    const shape = buildSmoothBlobShape(cells, state);
+    if (!shape) return null;
+    const outerRadii = shape.radii.map(radius => radius + radiusPaddingKm);
+    const coordinates = [ringFromRadii(center, shape.centroid, outerRadii)];
+
+    if (innerCells && innerCells.length) {
+      const innerShape = buildSmoothBlobShape(innerCells, state, shape.centroid);
+      if (innerShape) {
+        const holeRadii = innerShape.radii.map((radius, i) => Math.min(radius, outerRadii[i] * 0.9));
+        if (median(holeRadii) > FIRE_GRID.cellKm * 0.8) {
+          const holeRing = ringFromRadii(center, shape.centroid, holeRadii).reverse();
+          coordinates.push(holeRing);
+        }
+      }
+    }
 
     const maxIntensity = cells.reduce((value, cell) => Math.max(value, cell.intensity, cell.heat), 0);
     return {
@@ -299,7 +335,7 @@
         intensity: Number(maxIntensity.toFixed(3)),
         cellCount: cells.length
       },
-      geometry: { type: "Polygon", coordinates: [ring] }
+      geometry: { type: "Polygon", coordinates }
     };
   }
 
@@ -310,10 +346,12 @@
       embers: cells.filter(cell => cell.state === STATE.EMBERS),
       active: cells.filter(cell => cell.state === STATE.ACTIVE)
     };
+    const burnedInterior = groups.burned.concat(groups.embers);
     const features = [];
     for (const [state, group] of Object.entries(groups)) {
       const padding = state === "heat" ? 0.34 : state === "active" ? 0.18 : 0.15;
-      const feature = buildSmoothBlobFeature(group, state, center, padding);
+      const innerCells = state === "active" ? burnedInterior : null;
+      const feature = buildSmoothBlobFeature(group, state, center, padding, innerCells);
       if (feature) features.push(feature);
     }
     return { type: "FeatureCollection", features };
@@ -464,22 +502,8 @@
         filter: ["==", ["get", "state"], "heat"],
         paint: {
           "fill-color": FIRE_COLORS.heat,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 6, 0.08, 10, 0.16, 14, 0.22]
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 6, 0.04, 10, 0.08, 14, 0.12]
         }
-      },
-      {
-        id: "fire-burn-scar",
-        type: "fill",
-        source: FIRE_SOURCE_ID,
-        filter: ["==", ["get", "state"], "burned"],
-        paint: { "fill-color": FIRE_COLORS.burned, "fill-opacity": 0.76 }
-      },
-      {
-        id: "fire-ember-bed",
-        type: "fill",
-        source: FIRE_SOURCE_ID,
-        filter: ["==", ["get", "state"], "embers"],
-        paint: { "fill-color": FIRE_COLORS.embers, "fill-opacity": 0.42 }
       },
       {
         id: "fire-active-core",
@@ -499,6 +523,20 @@
           "line-width": ["interpolate", ["linear"], ["zoom"], 6, 4, 11, 12, 15, 28],
           "line-blur": ["interpolate", ["linear"], ["zoom"], 6, 5, 11, 12, 15, 22]
         }
+      },
+      {
+        id: "fire-ember-bed",
+        type: "fill",
+        source: FIRE_SOURCE_ID,
+        filter: ["==", ["get", "state"], "embers"],
+        paint: { "fill-color": FIRE_COLORS.embers, "fill-opacity": 0.22 }
+      },
+      {
+        id: "fire-burn-scar",
+        type: "fill",
+        source: FIRE_SOURCE_ID,
+        filter: ["==", ["get", "state"], "burned"],
+        paint: { "fill-color": FIRE_COLORS.burned, "fill-opacity": 0.82 }
       },
       {
         id: "fire-perimeter",
