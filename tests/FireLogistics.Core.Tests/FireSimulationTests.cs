@@ -165,6 +165,79 @@ public sealed class FireSimulationTests
     }
 
     [Fact]
+    public void FireFrameCapsRenderedCellsForLargeIncidents()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 220);
+
+        FireSimulationFrame frame = FireFrameBuilder.Build(state);
+
+        Assert.InRange(frame.Cells.Count, 1, 12_000);
+        Assert.InRange(frame.Zones.Features.Sum(feature => feature.Properties.CellCount), 1, 2_500);
+        Assert.Contains(frame.Cells, cell => cell.State == "active");
+        Assert.True(frame.Stats.ActiveCells > 0);
+    }
+
+    [Fact]
+    public void BurnedCellsMoveIntoCompactBurnScar()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 90);
+
+        FireSimulationFrame frame = FireFrameBuilder.Build(state);
+
+        Assert.True(state.BurnScar.Count > 0);
+        Assert.DoesNotContain(state.Cells.Values, cell => cell.State == FireCellState.Burned);
+        Assert.NotNull(frame.BurnScar);
+        Assert.True(frame.BurnScar.Runs.Count > 0);
+        Assert.True(frame.Stats.BurnedHectares > state.Cells.Count);
+    }
+
+    [Fact]
+    public void CompactBurnScarBlocksReignition()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 90);
+        FireGridCoordinate burnedCoordinate = state.BurnScar.Cells.Keys.First();
+
+        FireSimulator.Advance(state, 60);
+
+        Assert.True(state.BurnScar.Contains(burnedCoordinate));
+        Assert.False(state.Cells.TryGetValue(burnedCoordinate, out FireCell? cell) && cell.State != FireCellState.Unburned);
+    }
+
+    [Fact]
+    public void FireStatsIncludeCompactedBurnScarByFuel()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 90);
+
+        FireStats stats = FireFrameBuilder.Build(state).Stats;
+        int impactedFuelCells = stats.FuelImpacts.Values.Sum();
+
+        Assert.True(state.BurnScar.Count > 0);
+        Assert.True(impactedFuelCells >= state.BurnScar.Count + stats.ActiveCells);
+        Assert.True(stats.BurnedHectares >= Math.Round(state.BurnScar.Count * state.Environment.CellKm * state.Environment.CellKm * 100));
+    }
+
+    [Fact]
+    public void NonBurnableOverrideRemovesCompactedBurnScarCell()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 90);
+        FireGridCoordinate burnedCoordinate = state.BurnScar.Cells.Keys.First();
+
+        bool changed = state.ApplyFuelOverrides(new Dictionary<FireGridCoordinate, FuelType>
+        {
+            [burnedCoordinate] = FuelType.Water
+        });
+
+        Assert.True(changed);
+        Assert.False(state.BurnScar.Contains(burnedCoordinate));
+        Assert.True(FireFrameBuilder.Build(state).BurnScar?.Reset);
+    }
+
+    [Fact]
     public void CreateCanStartWithoutAutoIgnition()
     {
         FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42, igniteOnStart: false);
@@ -188,6 +261,16 @@ public sealed class FireSimulationTests
         Assert.False(cleared.IsAlive);
         Assert.Empty(cleared.Cells);
         Assert.Empty(FireFrameBuilder.Build(cleared).Zones.Features);
+    }
+
+    [Fact]
+    public void SimulationCellMapStaysBoundedDuringLongIncidents()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 220);
+
+        Assert.InRange(state.Cells.Count, 1, 8_000);
+        Assert.Contains(state.Cells.Values, cell => cell.State == FireCellState.Active);
     }
 
     private static string Snapshot(FireSimulationState state)

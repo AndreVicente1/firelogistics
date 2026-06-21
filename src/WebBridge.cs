@@ -102,8 +102,9 @@ public partial class WebBridge : Node
             return;
         }
 
-        string payload = JsonSerializer.Serialize(_fireRuntime.CurrentFrame, JsonOptions);
+        string payload = JsonSerializer.Serialize(_fireRuntime.BuildCurrentFrameForPublish(), JsonOptions);
         _webView.Call("eval", $"if(window.FireLogistics?.receiveFireFrame) window.FireLogistics.receiveFireFrame({payload});");
+        _fireRuntime.MarkCurrentFramePublished();
     }
 
     public void PushFuelSampleRequestToWeb()

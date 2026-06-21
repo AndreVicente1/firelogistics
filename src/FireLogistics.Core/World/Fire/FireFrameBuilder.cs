@@ -2,37 +2,86 @@ namespace FireLogistics.Core.World.Fire;
 
 public static class FireFrameBuilder
 {
+    private const int MaxRenderedFireCells = 12_000;
+    private const int MaxRenderedBurnedCells = 3_000;
+    private const int MaxRenderedZoneCells = 2_500;
+    private const int MaxRenderedZoneBurnedCells = 600;
+
     private static readonly FireCellState[] RenderStates =
     [
         FireCellState.Heat,
-        FireCellState.Burned,
         FireCellState.Embers,
         FireCellState.Active
     ];
 
     public static FireSimulationFrame Build(FireSimulationState state, string? status = null, int revision = 1, string reason = "initial")
     {
+        IReadOnlyList<FireCell> renderCells = SelectRenderableCells(
+            state.Cells.Values,
+            MaxRenderedFireCells,
+            MaxRenderedBurnedCells);
+        IReadOnlyList<FireCell> zoneCells = renderCells.Count > MaxRenderedZoneCells
+            ? SelectRenderableCells(renderCells, MaxRenderedZoneCells, MaxRenderedZoneBurnedCells)
+            : renderCells;
+
         return new FireSimulationFrame(
             state.Step,
             revision,
             reason,
             [state.Environment.Longitude, state.Environment.Latitude],
             state.Environment.IncidentSeed,
-            BuildFeatureCollection(state),
-            BuildCells(state),
+            BuildFeatureCollection(state, zoneCells),
+            BuildCells(renderCells),
             BuildEmitters(state),
             BuildStats(state),
             new FireWind(
                 state.Environment.WindDirection,
                 72,
                 (int)Math.Round(state.Environment.BaseWindSpeedKmh + Math.Sin(state.Step * 0.18) * 5)),
-            status ?? (state.IsAlive ? "running" : "extinguished"));
+            status ?? (state.IsAlive ? "running" : "extinguished"),
+            state.BurnScar.CreatePatch(state.Environment.CellKm));
     }
 
-    private static IReadOnlyList<WireFireCell> BuildCells(FireSimulationState state)
+    private static IReadOnlyList<FireCell> SelectRenderableCells(IEnumerable<FireCell> sourceCells, int maxCells, int maxBurnedCells)
     {
-        return state.Cells.Values
+        List<FireCell> visible = sourceCells
             .Where(cell => cell.State is FireCellState.Heat or FireCellState.Active or FireCellState.Embers or FireCellState.Burned)
+            .ToList();
+        if (visible.Count <= maxCells)
+        {
+            return visible;
+        }
+
+        var selected = new List<FireCell>(maxCells);
+        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Active), maxCells);
+        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Embers), maxCells - selected.Count);
+        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Heat), maxCells - selected.Count);
+        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Burned), Math.Min(maxBurnedCells, maxCells - selected.Count));
+        return selected;
+    }
+
+    private static void AddRenderableCells(List<FireCell> selected, IEnumerable<FireCell> candidates, int budget)
+    {
+        if (budget <= 0)
+        {
+            return;
+        }
+
+        List<FireCell> cells = candidates.ToList();
+        if (cells.Count <= budget)
+        {
+            selected.AddRange(cells);
+            return;
+        }
+
+        selected.AddRange(cells
+            .OrderBy(cell => StableCellHash(cell.Coordinate))
+            .Take(budget));
+    }
+
+    private static IReadOnlyList<WireFireCell> BuildCells(IReadOnlyList<FireCell> cells)
+    {
+        return cells
             .Select(cell => new WireFireCell(
                 cell.Coordinate.X,
                 cell.Coordinate.Y,
@@ -43,12 +92,12 @@ public static class FireFrameBuilder
             .ToList();
     }
 
-    private static FireFeatureCollection BuildFeatureCollection(FireSimulationState state)
+    private static FireFeatureCollection BuildFeatureCollection(FireSimulationState state, IReadOnlyList<FireCell> renderCells)
     {
         var features = new List<FireFeature>();
         foreach (FireCellState renderState in RenderStates)
         {
-            List<FireCell> cells = state.Cells.Values
+            List<FireCell> cells = renderCells
                 .Where(cell => cell.State == renderState)
                 .ToList();
 
@@ -179,7 +228,7 @@ public static class FireFrameBuilder
     private static FireStats BuildStats(FireSimulationState state)
     {
         List<FireCell> affected = state.Cells.Values
-            .Where(cell => cell.State is FireCellState.Active or FireCellState.Embers or FireCellState.Burned)
+            .Where(cell => cell.State is FireCellState.Active or FireCellState.Embers)
             .ToList();
         List<FireCell> active = state.Cells.Values
             .Where(cell => cell.State == FireCellState.Active)
@@ -191,9 +240,15 @@ public static class FireFrameBuilder
             fuelImpacts[ToWireName(cell.Fuel)]++;
         }
 
+        IReadOnlyDictionary<FuelType, int> scarImpacts = state.BurnScar.CountByFuel();
+        foreach ((FuelType fuel, int count) in scarImpacts)
+        {
+            fuelImpacts[ToWireName(fuel)] += count;
+        }
+
         double averageIntensity = active.Count == 0 ? 0 : active.Average(cell => cell.Intensity);
         return new FireStats(
-            (int)Math.Round(affected.Count * cellHectares),
+            (int)Math.Round((affected.Count + state.BurnScar.Count) * cellHectares),
             Math.Round(active.Count * state.Environment.CellKm * 0.32, 1),
             averageIntensity > 0.78 ? "Extreme" : averageIntensity > 0.54 ? "Forte" : "Moderee",
             active.Count,
@@ -203,7 +258,9 @@ public static class FireFrameBuilder
 
     private static int CountThreatenedBuildings(FireSimulationState state)
     {
-        int count = 0;
+        int count = state.BurnScar.CountByFuel().TryGetValue(FuelType.Urban, out int burnedUrban)
+            ? burnedUrban
+            : 0;
         foreach (FireCell cell in state.Cells.Values)
         {
             if (cell.Fuel != FuelType.Urban)
@@ -250,6 +307,19 @@ public static class FireFrameBuilder
                     yield return new FireGridCoordinate(coordinate.X + x, coordinate.Y + y);
                 }
             }
+        }
+    }
+
+    private static uint StableCellHash(FireGridCoordinate coordinate)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            hash = (hash ^ (uint)coordinate.X) * 16777619;
+            hash = (hash ^ (uint)(coordinate.X >> 16)) * 16777619;
+            hash = (hash ^ (uint)coordinate.Y) * 16777619;
+            hash = (hash ^ (uint)(coordinate.Y >> 16)) * 16777619;
+            return hash;
         }
     }
 

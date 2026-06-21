@@ -35,6 +35,7 @@ window.FireLogistics.receiveFireFrame(frame)
   "center": [5.38, 43.3],
   "incidentSeed": 1,
   "zones": { "type": "FeatureCollection", "features": [] },
+  "burnScar": { "reset": true, "revision": 1, "cellKm": 0.18, "runs": [] },
   "emitters": [],
   "cells": [],
   "stats": {
@@ -54,27 +55,30 @@ window.FireLogistics.receiveFireFrame(frame)
 
 `revision` is monotonic within an incident and `reason` explains why the frame was published (`"initial"`, `"tick"`, `"command"`, `"reset"`, `"ignition"`, or `"fuel_sample"`). The browser must apply only the newest Core frame for an incident and coalesce multiple received frames so MapLibre is updated at most once per browser animation frame.
 
-`zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells.
+`zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells. For large incidents, `zones` may be built from a smaller deterministic render sample than `cells`; clients that need a fluid surface should rebuild it from `cells`.
 
-`cells` is an optional compact array of rendered fire cells (`{ "x", "y", "fuel", "state", "intensity", "heat" }`) used by the browser to rebuild zones in blob mode without re-simulating locally. C# must publish it on every Core frame.
+`cells` is an optional compact, render-budgeted array of fire cells (`{ "x", "y", "fuel", "state", "intensity", "heat" }`) used by the browser to rebuild zones in blob mode without re-simulating locally. C# must publish it on every Core frame, but it may be deterministically sampled or capped for large incidents. Gameplay/state counters must come from `stats`, not from assuming `cells` is exhaustive.
+
+`burnScar` is an optional compact patch for the complete burned trace. It has `{ "reset": boolean, "revision": number, "cellKm": number, "runs": [{ "y": number, "x1": number, "x2": number, "fuel": string }] }`. When `reset` is true, the browser replaces the burn-scar source with exactly those runs. When `reset` is false, the browser appends the runs incrementally. `zones` and `cells` represent the live front and must not be treated as the complete burned-history source.
 
 The browser may switch fire rendering between:
 
 - `blob`: smooth tactical envelope built client-side from `cells`
 - `grid`: rectangular cell runs; Core frames may reuse authoritative `zones` directly
 
-Each zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface`, `burned-surface` for blob mode, or `{state}-{fuel}` for grid mode) so the browser can diff updates.
+Each live-zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface` for blob mode, or `{state}-{fuel}` for grid mode) so the browser can diff updates. Burn-scar features use ids derived from their patch revision and run coordinates.
 
 ## Fire map rendering
 
-Fire is rendered exclusively with native MapLibre GL `fill`/`line` layers bound to the `wildfire-zones` GeoJSON source. There is no canvas overlay, smoke layer, or particle FX.
+Fire is rendered exclusively with native MapLibre GL `fill`/`line` layers bound to GeoJSON sources. The live front uses `wildfire-zones`; the long-term burned trace uses `wildfire-burn-scar`. There is no canvas overlay, smoke layer, or particle FX.
 
-The map style declares `promoteId: "id"` on `wildfire-zones`. The browser must:
+The map style declares `promoteId: "id"` on `wildfire-zones` and `wildfire-burn-scar`. The browser must:
 
 1. Call `setData(zones)` once when fire zones first appear for an incident.
 2. Call `updateData(diff)` on later ticks, updating geometry/properties by stable feature id.
 3. Call `updateData({ removeAll: true })` when an incident is cleared.
 4. Skip MapLibre writes when the zones hash is unchanged.
+5. Apply `burnScar` patches to `wildfire-burn-scar` with `setData` on reset and `updateData({ add })` for deltas.
 
 Tactical layer ids (bottom to top): `fire-heat`, `fire-active-core`, `fire-active-glow`, `fire-ember-bed`, `fire-burn-scar`, `fire-perimeter`, `wildfire-ignition`. Layers drape on the terrain DEM.
 

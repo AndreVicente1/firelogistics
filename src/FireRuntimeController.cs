@@ -1,6 +1,7 @@
 using FireLogistics.Core.World.Fire;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 public sealed class FireRuntimeController
@@ -23,12 +24,20 @@ public sealed class FireRuntimeController
     private bool _sampleRequestPending;
     private bool _hasIgnition;
     private double _tickTimer;
+    private double _tickIntervalSeconds = 0.72;
     private int _revision = 1;
     private string _reason = "initial";
 
     public bool Running { get; private set; }
 
     public FireSimulationFrame CurrentFrame => FireFrameBuilder.Build(_state, CurrentStatus, _revision, _reason);
+
+    public FireSimulationFrame BuildCurrentFrameForPublish() => CurrentFrame;
+
+    public void MarkCurrentFramePublished()
+    {
+        _state.BurnScar.MarkPublished();
+    }
 
     private string CurrentStatus => !_hasIgnition
         ? "idle"
@@ -44,13 +53,15 @@ public sealed class FireRuntimeController
         }
 
         _tickTimer += deltaSeconds;
-        if (_tickTimer < 0.72)
+        if (_tickTimer < _tickIntervalSeconds)
         {
             return false;
         }
 
         _tickTimer = 0;
+        long startedAt = Stopwatch.GetTimestamp();
         FireSimulator.Advance(_state);
+        UpdateTickBudget(Stopwatch.GetElapsedTime(startedAt));
         if (!_state.IsAlive)
         {
             Running = false;
@@ -89,6 +100,7 @@ public sealed class FireRuntimeController
 
         _state = FireSimulator.Create(_state.Environment.Longitude, _state.Environment.Latitude);
         _tickTimer = 0;
+        _tickIntervalSeconds = 0.72;
         ClearSampleState();
         Running = _state.IsAlive;
         ResetRevision("reset");
@@ -101,6 +113,7 @@ public sealed class FireRuntimeController
             _state.Environment.Latitude,
             igniteOnStart: false);
         _tickTimer = 0;
+        _tickIntervalSeconds = 0.72;
         _hasIgnition = false;
         ClearSampleState();
         Running = false;
@@ -111,6 +124,7 @@ public sealed class FireRuntimeController
     {
         _state = FireSimulator.Create(longitude, latitude);
         _tickTimer = 0;
+        _tickIntervalSeconds = 0.72;
         _hasIgnition = true;
         ClearSampleState();
         Running = _state.IsAlive;
@@ -143,9 +157,9 @@ public sealed class FireRuntimeController
         _sampleHeight = nextHeight;
         _sampleRequestPending = false;
         MarkSampleRegion(originX, originY, width, height);
-        _state.ApplyFuelOverrides(fuelOverrides);
+        bool burnScarChanged = _state.ApplyFuelOverrides(fuelOverrides);
         Running = Running && _state.IsAlive;
-        if (before == BuildVisibleSignature())
+        if (!burnScarChanged && before == BuildVisibleSignature())
         {
             return false;
         }
@@ -308,9 +322,20 @@ public sealed class FireRuntimeController
         return string.Join(
             "|",
             _state.Cells.Values
-                .Where(cell => cell.State != FireCellState.Unburned)
+                .Where(cell => cell.State is FireCellState.Heat or FireCellState.Active or FireCellState.Embers)
                 .OrderBy(cell => cell.Coordinate.X)
                 .ThenBy(cell => cell.Coordinate.Y)
                 .Select(cell => $"{cell.Coordinate.X},{cell.Coordinate.Y}:{cell.State}:{cell.Fuel}:{Math.Round(cell.Heat, 2)}"));
+    }
+
+    private void UpdateTickBudget(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMilliseconds > 120)
+        {
+            _tickIntervalSeconds = Math.Min(2.5, Math.Max(_tickIntervalSeconds, elapsed.TotalSeconds * 2.0));
+            return;
+        }
+
+        _tickIntervalSeconds = Math.Max(0.72, _tickIntervalSeconds * 0.92);
     }
 }

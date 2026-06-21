@@ -23,18 +23,26 @@
     ];
     const TERRAIN_SOURCE_ID = "terrain-dem";
     const TERRAIN_EXAGGERATION = 1.35;
+    const FUEL_SAMPLE_STRIDE = 3;
+    const FUEL_SAMPLE_BUDGET_MS = 6;
+    const FUEL_SAMPLE_MIN_BLOCKS_PER_FRAME = 8;
     const TERRAIN_TILEJSON_URL = "data/terrain-dem/tilejson.json";
     function sendToGodot(action, payload) {
         const message = JSON.stringify({ action, payload });
+        if (global.ipc?.postMessage) {
+            global.ipc.postMessage(message);
+            return true;
+        }
         if (global.godot?.ipc) {
             global.godot.ipc.postMessage(message);
-            return;
+            return true;
         }
         if (global.GodotBridge?.postMessage) {
             global.GodotBridge.postMessage(message);
-            return;
+            return true;
         }
         console.info("[FireLogistics bridge fallback]", message);
+        return false;
     }
     function formatBytes(bytes) {
         const value = Number(bytes) || 0;
@@ -183,7 +191,24 @@
         }
     }
     function hashZones(zones) {
-        return JSON.stringify(zones);
+        const features = zones?.features || [];
+        if (!features.length)
+            return "empty";
+        let hash = 2166136261;
+        for (const feature of features) {
+            const id = String(feature?.properties?.id ?? "");
+            const cellCount = Number(feature?.properties?.cellCount ?? 0);
+            for (let i = 0; i < id.length; i++) {
+                hash ^= id.charCodeAt(i);
+                hash = Math.imul(hash, 16777619);
+            }
+            hash ^= cellCount;
+            hash = Math.imul(hash, 16777619);
+            const ringCount = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates.length : 0;
+            hash ^= ringCount;
+            hash = Math.imul(hash, 16777619);
+        }
+        return String(hash >>> 0);
     }
     function cloneFireZoneFeatures(features) {
         return features.map(feature => ({
@@ -240,10 +265,49 @@
         state.fireZonesEverLoaded = false;
         state.lastZoneFeatures = [];
         state.lastZonesHash = null;
+        state.lastResolvedZones = null;
+        state.lastResolvedZonesKey = null;
+    }
+    function resetBurnScarRenderState(state) {
+        state.burnScarEverLoaded = false;
+        state.burnScarFeatures = [];
+        state.burnScarRuns = [];
+        state.lastBurnScarRevision = -1;
+    }
+    function buildFireGeometryKey(frame, renderMode) {
+        if (!frame)
+            return "none";
+        const seed = frame.incidentSeed ?? "no-seed";
+        const step = frame.step ?? 0;
+        const cellCount = Array.isArray(frame.cells) ? frame.cells.length : 0;
+        const mutationRevision = frame.reason === "fuel_sample" ? `:${frame.revision ?? "sample"}` : "";
+        return `${seed}:${step}:${renderMode}:${cellCount}${mutationRevision}`;
+    }
+    function resolveEffectiveFireRenderMode(frame, renderMode, state) {
+        const requestedMode = Fire.normalizeRenderMode(renderMode ?? Fire.DEFAULT_FIRE_RENDER_MODE);
+        if (requestedMode !== Fire.FIRE_RENDER_MODES.GRID)
+            return requestedMode;
+        return state?.mapInteracting
+            ? Fire.FIRE_RENDER_MODES.BLOB
+            : requestedMode;
+    }
+    function resolveCachedFireZones(frame, renderMode, state) {
+        const effectiveMode = resolveEffectiveFireRenderMode(frame, renderMode, state);
+        const cacheKey = buildFireGeometryKey(frame, effectiveMode);
+        if (state?.lastResolvedZones && state.lastResolvedZonesKey === cacheKey) {
+            return { zones: state.lastResolvedZones, renderMode: effectiveMode };
+        }
+        const zones = Fire.resolveFireZones(frame, effectiveMode);
+        if (state) {
+            state.lastResolvedZones = zones;
+            state.lastResolvedZonesKey = cacheKey;
+        }
+        return { zones, renderMode: effectiveMode };
     }
     function applyFireZonesToSource(fireSource, state, zones) {
         const features = zones.features || [];
         const zonesHash = hashZones(zones);
+        const useFullRewrite = features.length > 48;
         if (state && state.lastZonesHash === zonesHash)
             return false;
         if (!features.length) {
@@ -267,17 +331,17 @@
             fireSource.setData(zones);
             if (state) {
                 state.fireZonesEverLoaded = true;
-                state.lastZoneFeatures = cloneFireZoneFeatures(features);
+                state.lastZoneFeatures = useFullRewrite ? features : cloneFireZoneFeatures(features);
                 state.lastZonesHash = zonesHash;
                 if (state.counters)
                     state.counters.setData += 1;
             }
             return true;
         }
-        if (typeof fireSource.updateData !== "function") {
+        if (typeof fireSource.updateData !== "function" || useFullRewrite) {
             fireSource.setData(zones);
             if (state) {
-                state.lastZoneFeatures = cloneFireZoneFeatures(features);
+                state.lastZoneFeatures = useFullRewrite ? features : cloneFireZoneFeatures(features);
                 state.lastZonesHash = zonesHash;
                 if (state.counters)
                     state.counters.setData += 1;
@@ -296,19 +360,61 @@
         }
         return true;
     }
+    function applyBurnScarToSource(burnScarSource, state, frame) {
+        if (!burnScarSource?.setData || !frame?.burnScar)
+            return false;
+        const patch = frame.burnScar;
+        if (patch.reset) {
+            if (state)
+                state.burnScarRuns = [];
+        }
+        if (state && !Array.isArray(state.burnScarRuns))
+            state.burnScarRuns = [];
+        if (state && Array.isArray(patch.runs) && patch.runs.length) {
+            state.burnScarRuns.push(...patch.runs);
+        }
+        const mergedRuns = Fire.mergeBurnScarRunList(state?.burnScarRuns ?? patch.runs ?? []);
+        if (state)
+            state.burnScarRuns = mergedRuns;
+        const revision = Number(patch.revision ?? frame.revision ?? frame.step ?? 0);
+        if (!patch.reset && state?.burnScarEverLoaded && revision <= state.lastBurnScarRevision) {
+            return false;
+        }
+        const featureCollection = Fire.buildBurnScarFeatureCollection({
+            reset: patch.reset,
+            revision,
+            cellKm: patch.cellKm ?? Fire.FIRE_GRID.cellKm,
+            runs: mergedRuns
+        }, frame.center);
+        const features = featureCollection.features || [];
+        if (!features.length && !patch.reset)
+            return false;
+        burnScarSource.setData(featureCollection);
+        if (state) {
+            state.burnScarEverLoaded = true;
+            state.burnScarFeatures = features.slice();
+            state.lastBurnScarRevision = revision;
+            if (state.counters)
+                state.counters.burnScarSetData += 1;
+        }
+        return true;
+    }
     function applyFireFrameToSources(map, frame, ignitionCenter, renderMode) {
         if (map?.isStyleLoaded && !map.isStyleLoaded())
             return false;
         const ignitionSource = map?.getSource?.(Fire.IGNITION_SOURCE_ID);
         const fireSource = map?.getSource?.(Fire.FIRE_SOURCE_ID);
+        const burnScarSource = map?.getSource?.(Fire.BURN_SCAR_SOURCE_ID);
         if (!ignitionSource?.setData)
             return false;
         const state = map.__fireRenderState || null;
-        const zones = Fire.resolveFireZones(frame, renderMode ?? Fire.DEFAULT_FIRE_RENDER_MODE);
+        const { zones } = resolveCachedFireZones(frame, renderMode ?? Fire.DEFAULT_FIRE_RENDER_MODE, state);
         if (state && frame?.incidentSeed != null && state.lastAppliedIncidentSeed !== frame.incidentSeed) {
             state.lastAppliedIncidentSeed = frame.incidentSeed;
             resetFireZoneRenderState(state);
+            resetBurnScarRenderState(state);
         }
+        applyBurnScarToSource(burnScarSource, state, frame);
         if (fireSource?.setData) {
             applyFireZonesToSource(fireSource, state, zones);
         }
@@ -326,6 +432,7 @@
             center,
             incidentSeed: 0,
             zones: { type: "FeatureCollection", features: [] },
+            burnScar: { reset: true, revision: 0, cellKm: Fire.FIRE_GRID.cellKm, runs: [] },
             cells: [],
             emitters: [],
             stats: {
@@ -347,16 +454,32 @@
             lastRevision: -1,
             lastZonesHash: null,
             lastZoneFeatures: [],
+            lastResolvedZones: null,
+            lastResolvedZonesKey: null,
+            burnScarEverLoaded: false,
+            burnScarFeatures: [],
+            burnScarRuns: [],
+            lastBurnScarRevision: -1,
             fireZonesEverLoaded: false,
             lastIgnitionKey: null,
             pendingFrame: null,
+            pendingMapFrame: null,
+            pendingMapIgnitionCenter: null,
+            pendingMapRenderMode: null,
             renderScheduled: false,
+            mapInteracting: false,
+            mapRenderScheduled: false,
+            fuelSampleActive: false,
             counters: {
                 receiveFrame: 0,
                 setData: 0,
                 updateData: 0,
                 ignoredFrame: 0,
-                samplesSent: 0
+                samplesSent: 0,
+                deferredMapWrites: 0,
+                flushedMapWrites: 0,
+                burnScarSetData: 0,
+                burnScarUpdateData: 0
             }
         };
     }
@@ -385,6 +508,31 @@
     }
     function shouldClearFireEffects(previousFrame, nextFrame) {
         return Boolean(previousFrame && nextFrame && previousFrame.incidentSeed !== nextFrame.incidentSeed);
+    }
+    function mergeBurnScarPatch(previousPatch, nextPatch) {
+        if (!previousPatch)
+            return nextPatch || null;
+        if (!nextPatch)
+            return previousPatch;
+        if (nextPatch.reset)
+            return nextPatch;
+        return {
+            ...nextPatch,
+            reset: Boolean(previousPatch.reset),
+            revision: Math.max(Number(previousPatch.revision ?? 0), Number(nextPatch.revision ?? 0)),
+            runs: [
+                ...(Array.isArray(previousPatch.runs) ? previousPatch.runs : []),
+                ...(Array.isArray(nextPatch.runs) ? nextPatch.runs : [])
+            ]
+        };
+    }
+    function mergeFrameBurnScar(previousFrame, nextFrame) {
+        if (!previousFrame || !nextFrame || previousFrame.incidentSeed !== nextFrame.incidentSeed)
+            return nextFrame;
+        return {
+            ...nextFrame,
+            burnScar: mergeBurnScarPatch(previousFrame.burnScar, nextFrame.burnScar)
+        };
     }
     function buildFranceWorldStyle() {
         const baseLayers = [
@@ -483,6 +631,11 @@
                     promoteId: "id",
                     data: { type: "FeatureCollection", features: [] }
                 },
+                [Fire.BURN_SCAR_SOURCE_ID]: {
+                    type: "geojson",
+                    promoteId: "id",
+                    data: { type: "FeatureCollection", features: [] }
+                },
                 [Fire.IGNITION_SOURCE_ID]: {
                     type: "geojson",
                     data: { type: "FeatureCollection", features: [] }
@@ -511,7 +664,7 @@
         }
     }
     function createFireSimulation(map) {
-        const usesCoreSimulation = Boolean(global.godot?.ipc || global.GodotBridge?.postMessage);
+        let usesCoreSimulation = Boolean(global.ipc?.postMessage || global.godot?.ipc || global.GodotBridge?.postMessage || api.pendingFireFrame);
         let running = false;
         let hasIgnition = false;
         let center = null;
@@ -524,25 +677,89 @@
         let lastTick = performance.now();
         const renderState = createFireRenderState();
         const fireSource = map.getSource(Fire.FIRE_SOURCE_ID);
+        const burnScarSource = map.getSource(Fire.BURN_SCAR_SOURCE_ID);
         const ignitionSource = map.getSource(Fire.IGNITION_SOURCE_ID);
         map.__fireRenderState = renderState;
-        function publish() {
-            const applied = applyFireFrameToSources({
+        function applyMapFrame(targetFrame, ignitionCenter, renderMode) {
+            return applyFireFrameToSources({
                 __fireRenderState: renderState,
                 isStyleLoaded() {
                     return !map.isStyleLoaded || map.isStyleLoaded();
                 },
                 getSource(id) {
-                    return map.getSource(id) || (id === Fire.FIRE_SOURCE_ID ? fireSource : ignitionSource);
+                    return map.getSource(id)
+                        || (id === Fire.FIRE_SOURCE_ID ? fireSource : id === Fire.BURN_SCAR_SOURCE_ID ? burnScarSource : ignitionSource);
                 }
-            }, frame, hasIgnition ? center : null, fireRenderMode);
+            }, targetFrame, ignitionCenter, renderMode);
+        }
+        function queueMapFrame(targetFrame, ignitionCenter, renderMode) {
+            renderState.pendingMapFrame = targetFrame;
+            renderState.pendingMapIgnitionCenter = ignitionCenter;
+            renderState.pendingMapRenderMode = renderMode;
+            renderState.counters.deferredMapWrites += 1;
+        }
+        function flushDeferredMapFrame() {
+            renderState.mapRenderScheduled = false;
+            if (renderState.mapInteracting || !renderState.pendingMapFrame)
+                return;
+            const applied = applyMapFrame(renderState.pendingMapFrame, renderState.pendingMapIgnitionCenter, renderState.pendingMapRenderMode);
+            if (!applied) {
+                return;
+            }
+            renderState.pendingMapFrame = null;
+            renderState.pendingMapIgnitionCenter = null;
+            renderState.pendingMapRenderMode = null;
+            if (!usesCoreSimulation && state)
+                Fire.markBurnScarPublished(state.burnScar);
+            renderState.counters.flushedMapWrites += 1;
+        }
+        function scheduleDeferredMapFlush() {
+            if (renderState.mapRenderScheduled)
+                return;
+            renderState.mapRenderScheduled = true;
+            global.requestAnimationFrame(flushDeferredMapFrame);
+        }
+        function publish() {
+            const ignitionCenter = hasIgnition ? center : null;
+            let applied = true;
+            if (renderState.mapInteracting) {
+                queueMapFrame(frame, ignitionCenter, fireRenderMode);
+            }
+            else {
+                applied = applyMapFrame(frame, ignitionCenter, fireRenderMode);
+                if (applied && !usesCoreSimulation && state)
+                    Fire.markBurnScarPublished(state.burnScar);
+            }
             updateFireHud(frame, running);
             return applied;
+        }
+        function getFluidRenderModeForBuild() {
+            const requestedMode = Fire.normalizeRenderMode(fireRenderMode);
+            return requestedMode === Fire.FIRE_RENDER_MODES.GRID && renderState.mapInteracting
+                ? Fire.FIRE_RENDER_MODES.BLOB
+                : requestedMode;
+        }
+        function markMapInteractionActive() {
+            renderState.mapInteracting = true;
+        }
+        function markMapInteractionIdle() {
+            renderState.mapInteracting = false;
+            if (renderState.pendingMapFrame && !renderState.mapRenderScheduled) {
+                scheduleDeferredMapFlush();
+            }
+        }
+        if (typeof map.on === "function") {
+            for (const eventName of ["movestart", "zoomstart", "rotatestart", "pitchstart"]) {
+                map.on(eventName, markMapInteractionActive);
+            }
+            for (const eventName of ["moveend", "zoomend", "rotateend", "pitchend", "idle"]) {
+                map.on(eventName, markMapInteractionIdle);
+            }
         }
         function rebuildFrame() {
             if (!state)
                 return;
-            frame = Fire.buildFireSimulationFrameFromState(state, { renderMode: fireRenderMode });
+            frame = Fire.buildFireSimulationFrameFromState(state, { renderMode: getFluidRenderModeForBuild() });
             publish();
         }
         function rebuildStateWithFuelOverrides(nextFuelOverrides) {
@@ -554,6 +771,22 @@
             rebuildFrame();
         }
         let fuelModelApplied = false;
+        function switchToCoreSimulation() {
+            if (usesCoreSimulation)
+                return;
+            usesCoreSimulation = true;
+            state = null;
+            fuelOverrides = null;
+            fuelModelApplied = false;
+            resetFireZoneRenderState(renderState);
+        }
+        function switchToLocalSimulation() {
+            if (!usesCoreSimulation)
+                return;
+            usesCoreSimulation = false;
+            state = Fire.createIdleFireSimulationState({ center: center ?? Fire.DEFAULT_FIRE_CENTER });
+            resetFireZoneRenderState(renderState);
+        }
         function refreshRenderedFuelModel() {
             if (!hasIgnition)
                 return;
@@ -599,6 +832,7 @@
             fuelModelApplied = false;
             api.selectingIgnition = false;
             updateSelectionUi(false);
+            renderState.fuelSampleActive = false;
             if (usesCoreSimulation) {
                 sendToGodot("fire_command", { command: "clear" });
                 return;
@@ -638,15 +872,11 @@
             receiveFrame(nextFrame) {
                 if (!nextFrame)
                     return;
-                if (usesCoreSimulation) {
-                    queueCoreFrame(nextFrame);
-                    return;
-                }
-                frame = nextFrame;
-                center = nextFrame.center || center;
-                hasIgnition = nextFrame.status !== "idle";
-                running = nextFrame.status === "running";
-                publish();
+                switchToCoreSimulation();
+                queueCoreFrame(nextFrame);
+            },
+            usesCoreSimulation() {
+                return usesCoreSimulation;
             },
             toggle() {
                 if (usesCoreSimulation) {
@@ -674,9 +904,13 @@
             setIgnitionCenter(lngLat) {
                 center = [Number(lngLat[0]), Number(lngLat[1])];
                 hasIgnition = true;
+                let notifyGodot = true;
                 if (usesCoreSimulation) {
-                    sendToGodot("fire_ignition_selected", { center });
-                    return;
+                    if (sendToGodot("fire_ignition_selected", { center })) {
+                        return;
+                    }
+                    switchToLocalSimulation();
+                    notifyGodot = false;
                 }
                 running = true;
                 fuelOverrides = null;
@@ -685,28 +919,45 @@
                 rebuildFrame();
                 refreshRenderedFuelModel();
                 map.once("idle", refreshRenderedFuelModel);
-                sendToGodot("fire_ignition_selected", { center });
+                if (notifyGodot) {
+                    sendToGodot("fire_ignition_selected", { center });
+                }
             },
             requestFuelSample(request) {
-                const deliverSample = () => {
-                    const sample = createRenderedFuelSample(map, center, request);
-                    if (sample) {
-                        renderState.counters.samplesSent += 1;
-                        sendToGodot("fire_fuel_overrides_ready", sample);
-                        return true;
-                    }
-                    return false;
-                };
-                if (deliverSample()) {
+                if (renderState.fuelSampleActive)
                     return;
-                }
-                sendToGodot("fire_fuel_sample_failed", request ?? null);
-                map.once("idle", () => {
-                    if (!hasIgnition || deliverSample()) {
-                        return;
-                    }
+                const deliverFailure = () => {
                     sendToGodot("fire_fuel_sample_failed", request ?? null);
-                });
+                };
+                const deliverSample = (afterIdle = false) => {
+                    if (!hasIgnition)
+                        return;
+                    renderState.fuelSampleActive = true;
+                    const started = scheduleRenderedFuelSample(map, center, request, {
+                        onSuccess(sample) {
+                            renderState.fuelSampleActive = false;
+                            renderState.counters.samplesSent += 1;
+                            sendToGodot("fire_fuel_overrides_ready", sample);
+                        },
+                        onFailure() {
+                            renderState.fuelSampleActive = false;
+                            if (!afterIdle) {
+                                map.once("idle", () => deliverSample(true));
+                                return;
+                            }
+                            deliverFailure();
+                        }
+                    });
+                    if (!started) {
+                        renderState.fuelSampleActive = false;
+                        if (!afterIdle) {
+                            map.once("idle", () => deliverSample(true));
+                            return;
+                        }
+                        deliverFailure();
+                    }
+                };
+                deliverSample();
             }
         };
         function queueCoreFrame(nextFrame) {
@@ -715,7 +966,7 @@
                 renderState.counters.ignoredFrame += 1;
                 return;
             }
-            renderState.pendingFrame = nextFrame;
+            renderState.pendingFrame = mergeFrameBurnScar(renderState.pendingFrame, nextFrame);
             if (renderState.renderScheduled)
                 return;
             renderState.renderScheduled = true;
@@ -747,6 +998,19 @@
     function createRenderedFuelSample(map, center, request) {
         if (!request)
             return null;
+        const job = createRenderedFuelSampleJob(map, center, request);
+        if (!job)
+            return null;
+        while (job.blockIndex < job.blockCount) {
+            if (!stepRenderedFuelSample(map, center, job, { unlimited: true })) {
+                return null;
+            }
+        }
+        return finalizeRenderedFuelSample(job);
+    }
+    function createRenderedFuelSampleJob(map, center, request) {
+        if (!request)
+            return null;
         const width = Math.max(1, Number(request.width) || 0);
         const height = Math.max(1, Number(request.height) || 0);
         const originX = Number(request.originX) || 0;
@@ -754,32 +1018,108 @@
         const cellKm = Number(request.cellKm) || Fire.FIRE_GRID.cellKm;
         if (!map?.queryRenderedFeatures || !map?.project || width <= 0 || height <= 0)
             return null;
-        const queryLayers = ["buildings", "fuel-water", "fuel-mineral", "fuel-forest", "fuel-scrub", "fuel-grass", "fuel-crops", "fuel-urban"];
-        const fuels = [];
-        let resolved = 0;
+        const stride = Math.max(1, Number(request.stride) || FUEL_SAMPLE_STRIDE);
+        const blockCols = Math.ceil(width / stride);
+        const blockRows = Math.ceil(height / stride);
+        return {
+            originX,
+            originY,
+            width,
+            height,
+            stride,
+            blockCols,
+            blockRows,
+            blockCount: blockCols * blockRows,
+            cellKm,
+            fuels: new Array(width * height),
+            resolved: 0,
+            blockIndex: 0,
+            queryLayers: ["buildings", "fuel-water", "fuel-mineral", "fuel-forest", "fuel-scrub", "fuel-grass", "fuel-crops", "fuel-urban"]
+        };
+    }
+    function stepRenderedFuelSample(map, center, job, options = {}) {
+        if (!job || !map?.queryRenderedFeatures || !map?.project)
+            return false;
+        const unlimited = Boolean(options?.unlimited);
+        const budgetMs = Math.max(1, Number(options?.budgetMs) || FUEL_SAMPLE_BUDGET_MS);
+        const minBlocks = Math.max(1, Number(options?.minBlocks) || FUEL_SAMPLE_MIN_BLOCKS_PER_FRAME);
+        let processed = 0;
+        const now = typeof performance?.now === "function" ? () => performance.now() : () => Date.now();
+        const startAt = now();
         try {
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const gridX = originX + x;
-                    const gridY = originY + y;
-                    const lngLat = Fire.localKmToLngLat(center, gridX * cellKm, gridY * cellKm);
-                    const point = map.project(lngLat);
-                    const fuel = Fire.classifyRenderedFuel
-                        ? Fire.classifyRenderedFuel(map.queryRenderedFeatures(point, { layers: queryLayers }))
-                        : null;
-                    fuels.push(fuel);
-                    if (fuel)
-                        resolved += 1;
+            while (job.blockIndex < job.blockCount) {
+                if (!unlimited && processed >= minBlocks && now() - startAt >= budgetMs)
+                    break;
+                const blockX = job.blockIndex % job.blockCols;
+                const blockY = Math.floor(job.blockIndex / job.blockCols);
+                const startX = blockX * job.stride;
+                const startY = blockY * job.stride;
+                const endX = Math.min(job.width, startX + job.stride);
+                const endY = Math.min(job.height, startY + job.stride);
+                const sampleX = Math.min(job.width - 1, startX + Math.floor(job.stride / 2));
+                const sampleY = Math.min(job.height - 1, startY + Math.floor(job.stride / 2));
+                const gridX = job.originX + sampleX;
+                const gridY = job.originY + sampleY;
+                const lngLat = Fire.localKmToLngLat(center, gridX * job.cellKm, gridY * job.cellKm);
+                const point = map.project(lngLat);
+                const fuel = Fire.classifyRenderedFuel
+                    ? Fire.classifyRenderedFuel(map.queryRenderedFeatures(point, { layers: job.queryLayers }))
+                    : null;
+                for (let y = startY; y < endY; y++) {
+                    for (let x = startX; x < endX; x++) {
+                        const index = y * job.width + x;
+                        job.fuels[index] = fuel;
+                        if (fuel)
+                            job.resolved += 1;
+                    }
                 }
+                job.blockIndex += 1;
+                processed += 1;
             }
         }
         catch (error) {
             console.warn("[FireLogistics] Echantillonnage combustible indisponible", error);
-            return null;
+            return false;
         }
-        if (resolved <= width * height * 0.04)
+        return true;
+    }
+    function finalizeRenderedFuelSample(job) {
+        if (!job)
             return null;
-        return { originX, originY, width, height, cellKm, fuels };
+        if (job.resolved <= job.fuels.length * 0.04)
+            return null;
+        return {
+            originX: job.originX,
+            originY: job.originY,
+            width: job.width,
+            height: job.height,
+            cellKm: job.cellKm,
+            fuels: job.fuels
+        };
+    }
+    function scheduleRenderedFuelSample(map, center, request, callbacks) {
+        const job = createRenderedFuelSampleJob(map, center, request);
+        if (!job) {
+            callbacks.onFailure?.();
+            return false;
+        }
+        const pump = () => {
+            if (!stepRenderedFuelSample(map, center, job)) {
+                callbacks.onFailure?.();
+                return;
+            }
+            if (job.blockIndex < job.blockCount) {
+                global.requestAnimationFrame(pump);
+                return;
+            }
+            const sample = finalizeRenderedFuelSample(job);
+            if (sample)
+                callbacks.onSuccess?.(sample);
+            else
+                callbacks.onFailure?.();
+        };
+        pump();
+        return true;
     }
     function createMapFpsTracker(map) {
         let frameCount = 0;
@@ -908,6 +1248,7 @@
             FIRE_COLORS: Fire.FIRE_COLORS,
             FIRE_GRID: Fire.FIRE_GRID,
             FIRE_SOURCE_ID: Fire.FIRE_SOURCE_ID,
+            BURN_SCAR_SOURCE_ID: Fire.BURN_SCAR_SOURCE_ID,
             FUEL_COLORS,
             TERRAIN_EXAGGERATION,
             TERRAIN_SOURCE_ID,
@@ -924,15 +1265,18 @@
             hashZones,
             isNewerCoreFrame,
             markCoreFrameApplied,
+            mergeFrameBurnScar,
             getCoreToggleCommand,
             shouldClearFireEffects,
             resolveFireZones: Fire.resolveFireZones,
             FIRE_RENDER_MODES: Fire.FIRE_RENDER_MODES,
+            MAX_RENDERED_ZONE_CELLS: Fire.MAX_RENDERED_ZONE_CELLS,
             buildFranceWorldStyle,
             buildFuelLayerDefinitions,
             buildFuelLegendItems,
             buildTerrainLayerDefinition,
             buildTerrainSourceDefinition,
+            createFireSimulation,
             formatBytes
         };
     }

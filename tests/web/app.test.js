@@ -75,6 +75,7 @@ test("map style enables terrain relief on the cartography", () => {
 
 test("map style includes tactical wildfire layers above terrain and below roads", () => {
   const {
+    BURN_SCAR_SOURCE_ID,
     FIRE_COLORS,
     FIRE_SOURCE_ID,
     buildFireLayerDefinitions,
@@ -89,6 +90,8 @@ test("map style includes tactical wildfire layers above terrain and below roads"
   assert.equal(style.sources[FIRE_SOURCE_ID].promoteId, "id");
   assert.equal(style.sources[FIRE_SOURCE_ID].data.type, "FeatureCollection");
   assert.deepEqual(style.sources[FIRE_SOURCE_ID].data.features, []);
+  assert.equal(style.sources[BURN_SCAR_SOURCE_ID].type, "geojson");
+  assert.equal(style.sources[BURN_SCAR_SOURCE_ID].promoteId, "id");
   assert.deepEqual(fireLayers.map(layer => layer.id), [
     "fire-heat",
     "fire-active-core",
@@ -100,6 +103,7 @@ test("map style includes tactical wildfire layers above terrain and below roads"
   ]);
   assert.match(JSON.stringify(fireLayers.find(layer => layer.id === "fire-active-core").paint["fill-color"]), /intensity/);
   assert.equal(fireLayers.find(layer => layer.id === "fire-burn-scar").paint["fill-color"], FIRE_COLORS.burned);
+  assert.equal(fireLayers.find(layer => layer.id === "fire-burn-scar").source, BURN_SCAR_SOURCE_ID);
 
   const firstFireIndex = layerIds.indexOf("fire-heat");
   const lastFireIndex = layerIds.indexOf("fire-perimeter");
@@ -141,6 +145,7 @@ test("wildfire polygons are filled surfaces without donut holes", () => {
 
 test("fire layers render natively from the GeoJSON source draped on terrain", () => {
   const {
+    BURN_SCAR_SOURCE_ID,
     FIRE_SOURCE_ID,
     buildFireLayerDefinitions
   } = require("../../assets/web/js/app.js");
@@ -149,7 +154,7 @@ test("fire layers render natively from the GeoJSON source draped on terrain", ()
   const fillAndLineLayers = fireLayers.filter(layer => layer.type === "fill" || layer.type === "line");
 
   assert.ok(fillAndLineLayers.length > 0);
-  assert.ok(fillAndLineLayers.every(layer => layer.source === FIRE_SOURCE_ID));
+  assert.ok(fillAndLineLayers.every(layer => layer.source === FIRE_SOURCE_ID || layer.source === BURN_SCAR_SOURCE_ID));
   assert.ok(fireLayers.every(layer => layer.layout?.visibility !== "none"));
 });
 
@@ -193,7 +198,8 @@ test("fire zone updates use incremental updateData after the initial setData", (
     FIRE_SOURCE_ID,
     applyFireFrameToSources,
     buildFireSimulationFrame,
-    createFireRenderState
+    createFireRenderState,
+    hashZones
   } = require("../../assets/web/js/app.js");
   const initial = buildFireSimulationFrame(3);
   const later = buildFireSimulationFrame(8);
@@ -220,7 +226,294 @@ test("fire zone updates use incremental updateData after the initial setData", (
 
   assert.equal(setDataCalls, 1);
   assert.equal(updateDataCalls, 1);
-  assert.equal(renderState.lastZonesHash, JSON.stringify(later.zones));
+  assert.equal(renderState.lastZonesHash, hashZones(later.zones));
+});
+
+test("burn scar deltas update a separate source without rewriting fire zones", () => {
+  const {
+    BURN_SCAR_SOURCE_ID,
+    FIRE_SOURCE_ID,
+    applyFireFrameToSources,
+    createEmptyFireFrame,
+    createFireRenderState
+  } = require("../../assets/web/js/app.js");
+  const renderState = createFireRenderState();
+  const initial = {
+    ...createEmptyFireFrame([5.38, 43.3]),
+    incidentSeed: 201,
+    revision: 1,
+    status: "running"
+  };
+  const delta = {
+    ...initial,
+    revision: 2,
+    burnScar: {
+      reset: false,
+      revision: 2,
+      cellKm: 0.18,
+      runs: [{ y: 0, x1: 0, x2: 2, fuel: "forest" }]
+    }
+  };
+  const writes = {
+    fireSetData: 0,
+    fireUpdateData: 0,
+    scarSetData: 0,
+    scarUpdateData: 0
+  };
+  const sources = {
+    [FIRE_SOURCE_ID]: {
+      setData() { writes.fireSetData += 1; },
+      updateData() { writes.fireUpdateData += 1; }
+    },
+    [BURN_SCAR_SOURCE_ID]: {
+      setData() { writes.scarSetData += 1; },
+      updateData(diff) {
+        writes.scarUpdateData += 1;
+        assert.equal(diff.add.length, 1);
+      }
+    },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: renderState,
+    getSource(id) { return sources[id]; }
+  };
+
+  applyFireFrameToSources(map, initial, initial.center);
+  applyFireFrameToSources(map, delta, delta.center);
+
+  assert.equal(writes.fireSetData, 1);
+  assert.equal(writes.fireUpdateData, 0);
+  assert.equal(writes.scarSetData, 2);
+  assert.equal(writes.scarUpdateData, 0);
+});
+
+test("pending Core fire frames merge burn scar deltas before render", () => {
+  const {
+    BURN_SCAR_SOURCE_ID,
+    createFireSimulation
+  } = require("../../assets/web/js/app.js");
+  const previousDocument = global.document;
+  const previousRequestAnimationFrame = global.requestAnimationFrame;
+  const previousIpc = global.ipc;
+  const previousPendingFrame = global.FireLogistics.pendingFireFrame;
+  const rafCallbacks = [];
+  let scarFeatureCount = 0;
+  global.document = {
+    getElementById() {
+      return { textContent: "", addEventListener() {}, classList: { toggle() {} } };
+    }
+  };
+  global.requestAnimationFrame = callback => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  };
+  global.ipc = { postMessage() {} };
+  global.FireLogistics.pendingFireFrame = null;
+  const sources = {
+    "wildfire-zones": { setData() {}, updateData() {} },
+    [BURN_SCAR_SOURCE_ID]: {
+      setData(data) { scarFeatureCount = data.features.length; },
+      updateData() {}
+    },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: null,
+    isStyleLoaded() { return true; },
+    getSource(id) { return sources[id]; }
+  };
+  const baseFrame = {
+    step: 1,
+    center: [5.38, 43.3],
+    incidentSeed: 202,
+    zones: { type: "FeatureCollection", features: [] },
+    cells: [],
+    emitters: [],
+    stats: { activeCells: 0, burnedHectares: 0, frontKilometers: 0, intensity: "Moderee", threatenedBuildings: 0, fuelImpacts: {} },
+    wind: { direction: "E-NE", degrees: 72, speedKmh: 28 },
+    status: "running"
+  };
+
+  try {
+    const controller = createFireSimulation(map);
+    controller.receiveFrame({
+      ...baseFrame,
+      revision: 1,
+      burnScar: { reset: false, revision: 1, cellKm: 0.18, runs: [{ y: 0, x1: 0, x2: 0, fuel: "forest" }] }
+    });
+    controller.receiveFrame({
+      ...baseFrame,
+      revision: 2,
+      burnScar: { reset: false, revision: 2, cellKm: 0.18, runs: [{ y: 1, x1: 1, x2: 1, fuel: "scrub" }] }
+    });
+    rafCallbacks.find(callback => callback.name === "applyPendingCoreFrame")();
+
+    assert.equal(scarFeatureCount, 2);
+  } finally {
+    global.document = previousDocument;
+    global.requestAnimationFrame = previousRequestAnimationFrame;
+    global.ipc = previousIpc;
+    global.FireLogistics.pendingFireFrame = previousPendingFrame;
+  }
+});
+
+test("fire map writes are deferred while the map is zooming", () => {
+  const {
+    FIRE_SOURCE_ID,
+    buildFireSimulationFrame,
+    createFireSimulation
+  } = require("../../assets/web/js/app.js");
+  const previousDocument = global.document;
+  const previousRequestAnimationFrame = global.requestAnimationFrame;
+  const previousIpc = global.ipc;
+  const previousPendingFrame = global.FireLogistics.pendingFireFrame;
+  const rafCallbacks = [];
+  const handlers = {};
+  const fireWrites = { setData: 0, updateData: 0 };
+  global.document = {
+    getElementById() {
+      return { textContent: "", addEventListener() {}, classList: { toggle() {} } };
+    }
+  };
+  global.requestAnimationFrame = callback => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  };
+  global.ipc = { postMessage() {} };
+  global.FireLogistics.pendingFireFrame = null;
+  const sources = {
+    [FIRE_SOURCE_ID]: {
+      setData() { fireWrites.setData += 1; },
+      updateData() { fireWrites.updateData += 1; }
+    },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: null,
+    isStyleLoaded() { return true; },
+    getSource(id) { return sources[id]; },
+    on(event, callback) { handlers[event] = callback; }
+  };
+  const frame = {
+    ...buildFireSimulationFrame(3),
+    incidentSeed: 101,
+    revision: 1,
+    status: "running"
+  };
+
+  try {
+    const controller = createFireSimulation(map);
+    handlers.zoomstart();
+    controller.receiveFrame(frame);
+    rafCallbacks.find(callback => callback.name === "applyPendingCoreFrame")();
+
+    assert.equal(fireWrites.setData, 0);
+    assert.equal(fireWrites.updateData, 0);
+    assert.equal(controller.getFrame(), frame);
+
+    handlers.zoomend();
+    rafCallbacks.find(callback => callback.name === "flushDeferredMapFrame")();
+
+    assert.equal(fireWrites.setData, 1);
+    assert.equal(fireWrites.updateData, 0);
+  } finally {
+    global.document = previousDocument;
+    global.requestAnimationFrame = previousRequestAnimationFrame;
+    global.ipc = previousIpc;
+    global.FireLogistics.pendingFireFrame = previousPendingFrame;
+  }
+});
+
+test("paused Core frames with unchanged geometry do not rewrite fire zones", () => {
+  const {
+    BURN_SCAR_SOURCE_ID,
+    FIRE_SOURCE_ID,
+    applyFireFrameToSources,
+    buildFireSimulationFrame,
+    createFireRenderState
+  } = require("../../assets/web/js/app.js");
+  const renderState = createFireRenderState();
+  const initial = {
+    ...buildFireSimulationFrame(6),
+    incidentSeed: 102,
+    revision: 2,
+    reason: "tick",
+    status: "running"
+  };
+  const paused = {
+    ...initial,
+    revision: 3,
+    reason: "command",
+    status: "paused"
+  };
+  let fireSetData = 0;
+  let fireUpdateData = 0;
+  let ignitionSetData = 0;
+  const map = {
+    __fireRenderState: renderState,
+    getSource(id) {
+      if (id === FIRE_SOURCE_ID) {
+        return {
+          setData() { fireSetData += 1; },
+          updateData() { fireUpdateData += 1; }
+        };
+      }
+      if (id === BURN_SCAR_SOURCE_ID) {
+        return {
+          setData() {},
+          updateData() {}
+        };
+      }
+      return {
+        setData() { ignitionSetData += 1; }
+      };
+    }
+  };
+
+  applyFireFrameToSources(map, initial, initial.center);
+  applyFireFrameToSources(map, paused, paused.center);
+
+  assert.equal(fireSetData, 1);
+  assert.equal(fireUpdateData, 0);
+  assert.equal(ignitionSetData, 1);
+});
+
+test("grid rendering keeps grid geometry when the cell budget is too high", () => {
+  const {
+    FIRE_RENDER_MODES,
+    FIRE_SOURCE_ID,
+    MAX_RENDERED_ZONE_CELLS,
+    applyFireFrameToSources,
+    buildFireSimulationFrame,
+    createFireRenderState
+  } = require("../../assets/web/js/app.js");
+  const frame = {
+    ...buildFireSimulationFrame(40),
+    incidentSeed: 103,
+    revision: 1,
+    status: "running"
+  };
+  const renderState = createFireRenderState();
+  let renderedZones = null;
+  const map = {
+    __fireRenderState: renderState,
+    getSource(id) {
+      if (id === FIRE_SOURCE_ID) {
+        return {
+          setData(data) { renderedZones = data; },
+          updateData() {}
+        };
+      }
+      return { setData() {} };
+    }
+  };
+
+  applyFireFrameToSources(map, frame, frame.center, FIRE_RENDER_MODES.GRID);
+
+  assert.ok(frame.cells.length > MAX_RENDERED_ZONE_CELLS);
+  assert.ok(renderedZones.features.length > 0);
+  assert.ok(renderedZones.features.every(feature => !feature.properties.id.endsWith("-surface")));
 });
 
 test("buildFireZonesDiff updates geometry for stable feature ids", () => {
@@ -324,6 +617,27 @@ test("createIdleFireSimulationState starts without active cells", () => {
   assert.equal(state.cells.filter(cell => cell.state === "active").length, 0);
 });
 
+test("fallback fire simulation can grow past the former 65x49 grid", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const frame = buildFireSimulationFrame(30);
+
+  assert.ok(frame.stats.activeCells > 0);
+  assert.ok(frame.cells.some(cell => Math.abs(cell.x) > 32 || Math.abs(cell.y) > 24));
+});
+
+test("sparse fire cells can be created outside the former grid", () => {
+  const { createSparseFireCell } = require("../../assets/web/js/fire-simulation.js");
+
+  const cell = createSparseFireCell(100, -75);
+
+  assert.equal(cell.x, 100);
+  assert.equal(cell.y, -75);
+  assert.equal(cell.xKm, 18);
+  assert.equal(cell.yKm, -13.5);
+  assert.ok(["water", "mineral", "crops", "grass", "scrub", "forest", "urban"].includes(cell.fuel));
+});
+
 test("incident seed changes require clearing fire effects", () => {
   const { shouldClearFireEffects } = require("../../assets/web/js/app.js");
 
@@ -355,6 +669,33 @@ test("rendered fuel samples include explicit sparse-grid origin", () => {
   assert.equal(sample.width, 3);
   assert.equal(sample.height, 2);
   assert.deepEqual(sample.fuels, ["water", "water", "water", "water", "water", "water"]);
+});
+
+test("rendered fuel sampling probes one point per coarse block", () => {
+  const { createRenderedFuelSample } = require("../../assets/web/js/app.js");
+  let probeCount = 0;
+  const map = {
+    project(lngLat) {
+      return { x: lngLat[0], y: lngLat[1] };
+    },
+    queryRenderedFeatures() {
+      probeCount += 1;
+      return [{ layer: { id: "fuel-forest" } }];
+    }
+  };
+
+  const sample = createRenderedFuelSample(map, [5.38, 43.3], {
+    originX: -4,
+    originY: -3,
+    width: 9,
+    height: 6,
+    cellKm: 0.18
+  });
+
+  assert.ok(sample);
+  assert.equal(probeCount, 6);
+  assert.equal(sample.fuels.length, 54);
+  assert.ok(sample.fuels.every(fuel => fuel === "forest"));
 });
 
 test("wildfire render mode toggle switches between blob and grid geometry", () => {
@@ -430,9 +771,60 @@ test("wildfire keeps a wind-driven front alive over a longer incident", () => {
   assert.ok(frame.zones.features.some(feature => feature.properties.state === "active"));
 });
 
+test("wildfire frames cap rendered cells without capping simulation stats", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const frame = buildFireSimulationFrame(140);
+  const renderedCellCount = frame.cells.length;
+  const renderedFeatureCellCount = frame.zones.features.reduce((sum, feature) => sum + feature.properties.cellCount, 0);
+
+  assert.ok(frame.stats.activeCells > 0);
+  assert.ok(frame.stats.burnedHectares > renderedCellCount);
+  assert.ok(renderedCellCount <= 12000);
+  assert.ok(renderedFeatureCellCount <= 12000);
+  assert.ok(frame.zones.features.some(feature => feature.properties.state === "active"));
+});
+
+test("fallback fire cell map stays bounded during long incidents", () => {
+  const {
+    advanceFireSimulationState,
+    createFireSimulationState
+  } = require("../../assets/web/js/fire-simulation.js");
+  const state = createFireSimulationState({ center: [5.38, 43.3] });
+
+  advanceFireSimulationState(state, 220);
+
+  assert.ok(state.cellMap.size <= 8000);
+  assert.ok(state.cells.length <= 8000);
+  assert.ok(state.cells.some(cell => cell.state === "active"));
+});
+test("fallback fire state compacts burned cells into burn scar over long incidents", () => {
+  const {
+    advanceFireSimulationState,
+    buildFireSimulationFrameFromState,
+    createFireSimulationState
+  } = require("../../assets/web/js/fire-simulation.js");
+  const state = createFireSimulationState({ center: [5.38, 43.3] });
+
+  advanceFireSimulationState(state, 140);
+  const frame = buildFireSimulationFrameFromState(state);
+
+  assert.ok(state.burnScar.cells.size > 0);
+  assert.equal(state.cells.some(cell => cell.state === "burned"), false);
+  assert.ok(frame.burnScar.runs.length > 0);
+  assert.ok(frame.stats.activeCells > 0);
+  assert.ok(frame.stats.burnedHectares > state.cells.length);
+});
+
 test("wildfire accepts rendered fuel overrides from the map", () => {
-  const { FIRE_GRID, buildFireSimulationFrame } = require("../../assets/web/js/app.js");
-  const waterOverrides = Array.from({ length: FIRE_GRID.width * FIRE_GRID.height }, () => "water");
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+  const waterOverrides = {
+    originX: -3,
+    originY: -3,
+    width: 7,
+    height: 7,
+    fuels: Array.from({ length: 49 }, () => "water")
+  };
 
   const frame = buildFireSimulationFrame(4, { fuelOverrides: waterOverrides });
 
@@ -452,6 +844,207 @@ test("wildfire frame can start from a selected map coordinate", () => {
     selectedFrame.zones.features[0].geometry.coordinates[0][0],
     defaultFrame.zones.features[0].geometry.coordinates[0][0]
   );
+});
+
+test("controller switches to Core mode when an authoritative Core frame arrives", () => {
+  const { createFireSimulation } = require("../../assets/web/js/app.js");
+  const previousDocument = global.document;
+  const previousRequestAnimationFrame = global.requestAnimationFrame;
+  const previousIpc = global.ipc;
+  const previousGodot = global.godot;
+  const previousGodotBridge = global.GodotBridge;
+  const previousPendingFrame = global.FireLogistics.pendingFireFrame;
+  const previousConsoleInfo = console.info;
+  const rafCallbacks = [];
+  global.document = {
+    getElementById() {
+      return {
+        textContent: "",
+        addEventListener() {},
+        classList: { toggle() {} }
+      };
+    }
+  };
+  global.requestAnimationFrame = callback => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  };
+  delete global.ipc;
+  delete global.godot;
+  delete global.GodotBridge;
+  global.FireLogistics.pendingFireFrame = null;
+  const sources = {
+    "wildfire-zones": { setData() {}, updateData() {} },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: null,
+    isStyleLoaded() { return true; },
+    getSource(id) { return sources[id]; }
+  };
+  const frame = {
+    step: 1,
+    revision: 1,
+    center: [5.4, 43.3],
+    incidentSeed: 77,
+    zones: { type: "FeatureCollection", features: [] },
+    cells: [{ x: 40, y: 0, fuel: "forest", state: "active", intensity: 0.8, heat: 1 }],
+    emitters: [],
+    stats: { activeCells: 1, burnedHectares: 0, frontKilometers: 0, intensity: "Forte", threatenedBuildings: 0, fuelImpacts: {} },
+    wind: { direction: "E-NE", degrees: 72, speedKmh: 28 },
+    status: "running"
+  };
+
+  try {
+    const controller = createFireSimulation(map);
+    assert.equal(controller.usesCoreSimulation(), false);
+
+    controller.receiveFrame(frame);
+    assert.equal(controller.usesCoreSimulation(), true);
+    rafCallbacks.find(callback => callback.name === "applyPendingCoreFrame")();
+
+    assert.equal(controller.getFrame(), frame);
+  } finally {
+    global.document = previousDocument;
+    global.requestAnimationFrame = previousRequestAnimationFrame;
+    global.ipc = previousIpc;
+    global.godot = previousGodot;
+    global.GodotBridge = previousGodotBridge;
+    global.FireLogistics.pendingFireFrame = previousPendingFrame;
+  }
+});
+
+test("pending Core frames force Core mode during controller creation", () => {
+  const { createFireSimulation } = require("../../assets/web/js/app.js");
+  const previousDocument = global.document;
+  const previousRequestAnimationFrame = global.requestAnimationFrame;
+  const previousIpc = global.ipc;
+  const previousPendingFrame = global.FireLogistics.pendingFireFrame;
+  const rafCallbacks = [];
+  global.document = {
+    getElementById() {
+      return {
+        textContent: "",
+        addEventListener() {},
+        classList: { toggle() {} }
+      };
+    }
+  };
+  global.ipc = { postMessage() {} };
+  global.requestAnimationFrame = callback => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  };
+  global.FireLogistics.pendingFireFrame = {
+    step: 1,
+    revision: 1,
+    center: [5.4, 43.3],
+    incidentSeed: 78,
+    zones: { type: "FeatureCollection", features: [] },
+    cells: [],
+    emitters: [],
+    stats: {},
+    wind: {},
+    status: "running"
+  };
+  const sources = {
+    "wildfire-zones": { setData() {}, updateData() {} },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: null,
+    isStyleLoaded() { return true; },
+    getSource(id) { return sources[id]; }
+  };
+
+  try {
+    const controller = createFireSimulation(map);
+
+    assert.equal(controller.usesCoreSimulation(), true);
+  } finally {
+    global.FireLogistics.pendingFireFrame = previousPendingFrame;
+    global.document = previousDocument;
+    global.requestAnimationFrame = previousRequestAnimationFrame;
+    global.ipc = previousIpc;
+  }
+});
+
+test("pending Core mode falls back locally when ignition cannot be sent to Godot", () => {
+  const { createFireSimulation } = require("../../assets/web/js/app.js");
+  const previousDocument = global.document;
+  const previousRequestAnimationFrame = global.requestAnimationFrame;
+  const previousIpc = global.ipc;
+  const previousGodot = global.godot;
+  const previousGodotBridge = global.GodotBridge;
+  const previousPendingFrame = global.FireLogistics.pendingFireFrame;
+  const previousConsoleInfo = console.info;
+  const rafCallbacks = [];
+  global.document = {
+    body: { classList: { toggle() {} } },
+    getElementById() {
+      return {
+        textContent: "",
+        addEventListener() {},
+        classList: { toggle() {} }
+      };
+    }
+  };
+  global.requestAnimationFrame = callback => {
+    rafCallbacks.push(callback);
+    return rafCallbacks.length;
+  };
+  delete global.ipc;
+  delete global.godot;
+  delete global.GodotBridge;
+  console.info = () => {};
+  global.FireLogistics.pendingFireFrame = {
+    step: 0,
+    revision: 1,
+    center: [5.4, 43.3],
+    incidentSeed: 79,
+    zones: { type: "FeatureCollection", features: [] },
+    cells: [],
+    emitters: [],
+    stats: {},
+    wind: {},
+    status: "idle"
+  };
+  const sources = {
+    "wildfire-zones": { setData() {}, updateData() {} },
+    "wildfire-ignition": { setData() {} }
+  };
+  const map = {
+    __fireRenderState: null,
+    isStyleLoaded() { return true; },
+    getSource(id) { return sources[id]; },
+    once(event, callback) {
+      if (event === "idle") callback();
+    },
+    queryRenderedFeatures() {
+      return [];
+    },
+    project(lngLat) {
+      return { x: lngLat[0], y: lngLat[1] };
+    }
+  };
+
+  try {
+    const controller = createFireSimulation(map);
+    assert.equal(controller.usesCoreSimulation(), true);
+
+    controller.setIgnitionCenter([5.4, 43.3]);
+
+    assert.equal(controller.usesCoreSimulation(), false);
+    assert.ok(controller.getFrame().stats.activeCells > 0);
+  } finally {
+    global.FireLogistics.pendingFireFrame = previousPendingFrame;
+    global.document = previousDocument;
+    global.requestAnimationFrame = previousRequestAnimationFrame;
+    global.ipc = previousIpc;
+    global.godot = previousGodot;
+    global.GodotBridge = previousGodotBridge;
+    console.info = previousConsoleInfo;
+  }
 });
 
 test("fuel legend exposes all gameplay categories", () => {

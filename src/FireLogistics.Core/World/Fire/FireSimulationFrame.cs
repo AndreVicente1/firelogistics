@@ -11,7 +11,8 @@ public sealed record FireSimulationFrame(
     IReadOnlyList<FireEmitter> Emitters,
     FireStats Stats,
     FireWind Wind,
-    string Status);
+    string Status,
+    FireBurnScarPatch? BurnScar = null);
 
 public sealed record FireFeatureCollection(string Type, IReadOnlyList<FireFeature> Features);
 
@@ -42,3 +43,11 @@ public sealed record FireStats(
 public sealed record FireWind(string Direction, int Degrees, int SpeedKmh);
 
 public sealed record FireFuelSampleRequest(int OriginX, int OriginY, int Width, int Height, double CellKm);
+
+public sealed record FireBurnScarPatch(
+    bool Reset,
+    int Revision,
+    double CellKm,
+    IReadOnlyList<FireBurnScarRun> Runs);
+
+public sealed record FireBurnScarRun(int Y, int X1, int X2, string Fuel);

@@ -2,6 +2,8 @@ namespace FireLogistics.Core.World.Fire;
 
 public static class FireSimulator
 {
+    private const int MaxLiveFireCells = 8000;
+
     public static FireSimulationState Create(
         double longitude,
         double latitude,
@@ -55,6 +57,11 @@ public static class FireSimulator
                     }
 
                     var targetCoordinate = new FireGridCoordinate(source.Coordinate.X + dx, source.Coordinate.Y + dy);
+                    if (state.BurnScar.Contains(targetCoordinate))
+                    {
+                        continue;
+                    }
+
                     FireCell target = state.GetOrCreate(targetCoordinate);
                     if (!next.TryGetValue(targetCoordinate, out FireCell? targetNext))
                     {
@@ -93,14 +100,51 @@ public static class FireSimulator
         state.MutableCells.Clear();
         foreach ((FireGridCoordinate coordinate, FireCell cell) in next)
         {
-            if (cell.State != FireCellState.Unburned || cell.Heat > 0.001 || FuelBehavior.For(cell.Fuel).Burnable)
+            if (cell.State == FireCellState.Burned)
+            {
+                state.BurnScar.Add(cell);
+                continue;
+            }
+
+            if (cell.State != FireCellState.Unburned)
             {
                 state.MutableCells.Add(coordinate, cell);
             }
         }
 
+        TrimLiveFireCells(state.MutableCells);
+
         state.Step++;
     }
+
+    private static void TrimLiveFireCells(Dictionary<FireGridCoordinate, FireCell> cells)
+    {
+        if (cells.Count <= MaxLiveFireCells)
+        {
+            return;
+        }
+
+        List<KeyValuePair<FireGridCoordinate, FireCell>> ranked = cells
+            .OrderByDescending(pair => LiveCellTrimScore(pair.Value))
+            .ThenBy(pair => pair.Key.X)
+            .ThenBy(pair => pair.Key.Y)
+            .Take(MaxLiveFireCells)
+            .ToList();
+
+        cells.Clear();
+        foreach ((FireGridCoordinate coordinate, FireCell cell) in ranked)
+        {
+            cells.Add(coordinate, cell);
+        }
+    }
+
+    private static double LiveCellTrimScore(FireCell cell) => cell.State switch
+    {
+        FireCellState.Active => 100 + cell.Intensity,
+        FireCellState.Embers => 10 + cell.Heat,
+        FireCellState.Heat => cell.Heat,
+        _ => double.MaxValue
+    };
 
     private static double HeatTransfer(FireEnvironment environment, FireCell source, FireCell target, int dx, int dy, int tick)
     {
@@ -133,6 +177,11 @@ public static class FireSimulator
             int downwindX = (int)Math.Round(source.Coordinate.X + state.Environment.WindX * (2 + behavior.Spotting * 12));
             int downwindY = (int)Math.Round(source.Coordinate.Y + state.Environment.WindY * (1 + behavior.Spotting * 6));
             var coordinate = new FireGridCoordinate(downwindX, downwindY);
+            if (state.BurnScar.Contains(coordinate))
+            {
+                continue;
+            }
+
             FireCell candidate = state.GetOrCreate(coordinate);
             if (!next.TryGetValue(coordinate, out FireCell? candidateNext))
             {

@@ -1,6 +1,7 @@
 (function (global) {
   const DEFAULT_FIRE_CENTER = [5.38, 43.3];
   const FIRE_SOURCE_ID = "wildfire-zones";
+  const BURN_SCAR_SOURCE_ID = "wildfire-burn-scar";
   const IGNITION_SOURCE_ID = "wildfire-ignition";
 
   const FIRE_COLORS = {
@@ -20,8 +21,6 @@
   ];
 
   const FIRE_GRID = {
-    width: 65,
-    height: 49,
     cellKm: 0.18
   };
 
@@ -60,8 +59,8 @@
 
   function getCellLocalKm(x, y) {
     return {
-      xKm: (x - (FIRE_GRID.width - 1) * 0.5) * FIRE_GRID.cellKm,
-      yKm: (y - (FIRE_GRID.height - 1) * 0.5) * FIRE_GRID.cellKm
+      xKm: x * FIRE_GRID.cellKm,
+      yKm: y * FIRE_GRID.cellKm
     };
   }
 
@@ -101,6 +100,7 @@
 
   const api = {
     DEFAULT_FIRE_CENTER,
+    BURN_SCAR_SOURCE_ID,
     FIRE_COLORS,
     FIRE_GRID,
     FIRE_LEGEND_ITEMS,

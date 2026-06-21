@@ -14,6 +14,7 @@ public sealed class FireSimulationState
     }
 
     public FireEnvironment Environment { get; }
+    public BurnScarStore BurnScar { get; } = new();
     public int Step { get; internal set; }
     public IReadOnlyDictionary<FireGridCoordinate, FireCell> Cells => _cells;
     internal Dictionary<FireGridCoordinate, FireCell> MutableCells => _cells;
@@ -33,16 +34,24 @@ public sealed class FireSimulationState
         return cell;
     }
 
-    public void ApplyFuelOverrides(IReadOnlyDictionary<FireGridCoordinate, FuelType> fuelOverrides)
+    public bool ApplyFuelOverrides(IReadOnlyDictionary<FireGridCoordinate, FuelType> fuelOverrides)
     {
+        bool burnScarChanged = false;
         Environment.MergeFuelOverrides(fuelOverrides);
         foreach ((FireGridCoordinate coordinate, FuelType fuel) in fuelOverrides)
         {
+            if (!FuelBehavior.For(fuel).Burnable)
+            {
+                burnScarChanged |= BurnScar.Remove(coordinate);
+            }
+
             if (_cells.TryGetValue(coordinate, out FireCell? cell))
             {
                 cell.ApplyFuel(fuel);
             }
         }
+
+        return burnScarChanged;
     }
 
     private void IgniteInitialCells()

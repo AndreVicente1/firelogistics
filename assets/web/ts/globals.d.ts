@@ -7,6 +7,7 @@ interface Window {
   FireLogisticsFireModel?: any;
   GodotBridge?: { postMessage(message: string): void };
   godot?: { ipc?: { postMessage(message: string): void } };
+  ipc?: { postMessage(message: string): void };
   maplibregl?: any;
   pmtiles?: any;
 }
