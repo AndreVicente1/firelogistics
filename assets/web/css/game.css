@@ -207,21 +207,39 @@ button:hover {
   background: #324c44;
 }
 
-.fire-panel button:first-child {
+.fire-panel #fire-start-button {
   border-color: rgba(255, 160, 80, 0.38);
   background: #4b3a1f;
 }
 
-.fire-panel button:first-child:hover {
+.fire-panel #fire-start-button:hover {
   background: #66502b;
 }
 
-.fire-panel button:nth-child(2) {
+.fire-panel #fire-render-mode-button {
+  border-color: rgba(120, 190, 255, 0.34);
+  background: #243746;
+}
+
+.fire-panel #fire-render-mode-button:hover {
+  background: #2f495c;
+}
+
+.fire-panel #fire-clear-button {
+  border-color: rgba(255, 120, 120, 0.34);
+  background: #4a2323;
+}
+
+.fire-panel #fire-clear-button:hover {
+  background: #5f2c2c;
+}
+
+.fire-panel #fire-toggle-button {
   border-color: rgba(255, 160, 80, 0.38);
   background: #743014;
 }
 
-.fire-panel button:nth-child(2):hover {
+.fire-panel #fire-toggle-button:hover {
   background: #8b3b18;
 }
 

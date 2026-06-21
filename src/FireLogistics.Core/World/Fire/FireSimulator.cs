@@ -2,10 +2,15 @@ namespace FireLogistics.Core.World.Fire;
 
 public static class FireSimulator
 {
-    public static FireSimulationState Create(double longitude, double latitude, int? incidentSeed = null, IReadOnlyDictionary<FireGridCoordinate, FuelType>? fuelOverrides = null)
+    public static FireSimulationState Create(
+        double longitude,
+        double latitude,
+        int? incidentSeed = null,
+        IReadOnlyDictionary<FireGridCoordinate, FuelType>? fuelOverrides = null,
+        bool igniteOnStart = true)
     {
         int seed = incidentSeed ?? Random.Shared.Next(1, int.MaxValue);
-        return new FireSimulationState(new FireEnvironment(longitude, latitude, seed, fuelOverrides));
+        return new FireSimulationState(new FireEnvironment(longitude, latitude, seed, fuelOverrides), igniteOnStart);
     }
 
     public static void Advance(FireSimulationState state, int ticks = 1)

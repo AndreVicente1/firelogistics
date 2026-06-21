@@ -11,7 +11,7 @@
         EMBERS: "embers",
         BURNED: "burned"
     };
-    function createInitialFireCells(fuelOverrides) {
+    function createInitialFireCells(fuelOverrides, ignite = true) {
         const cells = [];
         for (let y = 0; y < FIRE_GRID.height; y++) {
             for (let x = 0; x < FIRE_GRID.width; x++) {
@@ -20,7 +20,7 @@
                 const fuel = override && FUEL_BEHAVIOR[override] ? override : sampleScenarioFuel(local.xKm, local.yKm);
                 const behavior = FUEL_BEHAVIOR[fuel];
                 const distanceToIgnition = Math.hypot(local.xKm, local.yKm);
-                const active = distanceToIgnition < 0.34 && behavior.burnable;
+                const active = ignite && distanceToIgnition < 0.34 && behavior.burnable;
                 cells.push({
                     x,
                     y,
@@ -183,19 +183,24 @@
     }
     function createFireSimulationState(options = {}) {
         const center = normalizeCenter(options.center);
+        const ignite = options.ignite !== false;
         const fuelOverrides = options.fuelOverrides ?? null;
         return {
             step: 0,
             center,
             fuelOverrides,
-            cells: createInitialFireCells(fuelOverrides)
+            cells: createInitialFireCells(fuelOverrides, ignite)
         };
+    }
+    function createIdleFireSimulationState(options = {}) {
+        return createFireSimulationState({ ...options, ignite: false });
     }
     function resetFireSimulationState(state, options = {}) {
         state.step = 0;
         state.center = normalizeCenter(options.center ?? state.center);
         state.fuelOverrides = options.fuelOverrides ?? null;
-        state.cells = createInitialFireCells(state.fuelOverrides);
+        const ignite = options.ignite !== false;
+        state.cells = createInitialFireCells(state.fuelOverrides, ignite);
         return state;
     }
     function advanceFireSimulationState(state, ticks = 1) {
@@ -213,6 +218,154 @@
         return Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] ?? "unknown";
     }
     const BLOB_POINT_COUNT = 96;
+    const FIRE_RENDER_MODES = {
+        BLOB: "blob",
+        GRID: "grid"
+    };
+    const DEFAULT_FIRE_RENDER_MODE = FIRE_RENDER_MODES.BLOB;
+    function normalizeRenderMode(mode) {
+        return mode === FIRE_RENDER_MODES.GRID ? FIRE_RENDER_MODES.GRID : FIRE_RENDER_MODES.BLOB;
+    }
+    function normalizeFrameCells(cells, center, cellKm = FIRE_GRID.cellKm) {
+        if (!Array.isArray(cells))
+            return [];
+        const resolvedCellKm = Number(cellKm) || FIRE_GRID.cellKm;
+        return cells.map(cell => {
+            const x = Number(cell.x ?? cell.X);
+            const y = Number(cell.y ?? cell.Y);
+            const hasLocalKm = Number.isFinite(cell.xKm) && Number.isFinite(cell.yKm);
+            return {
+                x,
+                y,
+                xKm: hasLocalKm ? cell.xKm : x * resolvedCellKm,
+                yKm: hasLocalKm ? cell.yKm : y * resolvedCellKm,
+                fuel: cell.fuel ?? cell.Fuel ?? cell.f ?? "grass",
+                state: cell.state ?? cell.State ?? cell.s ?? STATE.UNBURNED,
+                intensity: Number(cell.intensity ?? cell.Intensity ?? cell.i ?? 0),
+                heat: Number(cell.heat ?? cell.Heat ?? cell.h ?? 0)
+            };
+        });
+    }
+    function fourNeighbors(coordinate, byCoordinate) {
+        const neighbors = [
+            { x: coordinate.x + 1, y: coordinate.y },
+            { x: coordinate.x - 1, y: coordinate.y },
+            { x: coordinate.x, y: coordinate.y + 1 },
+            { x: coordinate.x, y: coordinate.y - 1 }
+        ];
+        return neighbors.filter(neighbor => byCoordinate.has(`${neighbor.x},${neighbor.y}`));
+    }
+    function connectedComponents(cells) {
+        const byCoordinate = new Map(cells.map(cell => [`${cell.x},${cell.y}`, cell]));
+        const visited = new Set();
+        const components = [];
+        for (const cell of cells) {
+            const key = `${cell.x},${cell.y}`;
+            if (visited.has(key))
+                continue;
+            const component = [];
+            const queue = [{ x: cell.x, y: cell.y }];
+            visited.add(key);
+            while (queue.length) {
+                const coordinate = queue.shift();
+                const current = byCoordinate.get(`${coordinate.x},${coordinate.y}`);
+                component.push(current);
+                for (const neighbor of fourNeighbors(coordinate, byCoordinate)) {
+                    const neighborKey = `${neighbor.x},${neighbor.y}`;
+                    if (visited.has(neighborKey))
+                        continue;
+                    visited.add(neighborKey);
+                    queue.push(neighbor);
+                }
+            }
+            components.push(component);
+        }
+        return components;
+    }
+    function buildHorizontalRuns(cells) {
+        const runs = [];
+        const rows = new Map();
+        for (const cell of cells) {
+            if (!rows.has(cell.y))
+                rows.set(cell.y, []);
+            rows.get(cell.y).push(cell);
+        }
+        for (const rowCells of rows.values()) {
+            rowCells.sort((a, b) => a.x - b.x);
+            let run = [];
+            let previousX = null;
+            for (const cell of rowCells) {
+                if (previousX != null && cell.x !== previousX + 1) {
+                    if (run.length)
+                        runs.push(run);
+                    run = [];
+                }
+                run.push(cell);
+                previousX = cell.x;
+            }
+            if (run.length)
+                runs.push(run);
+        }
+        return runs;
+    }
+    function buildRunRing(center, run, cellKm) {
+        const minXCell = run.reduce((left, cell) => (cell.x < left.x ? cell : left));
+        const maxXCell = run.reduce((left, cell) => (cell.x > left.x ? cell : left));
+        const yCell = run[0];
+        const half = cellKm / 2;
+        const minXKm = minXCell.xKm - half;
+        const maxXKm = maxXCell.xKm + half;
+        const yKm = yCell.yKm;
+        return [
+            localKmToLngLat(center, minXKm, yKm - half),
+            localKmToLngLat(center, maxXKm, yKm - half),
+            localKmToLngLat(center, maxXKm, yKm + half),
+            localKmToLngLat(center, minXKm, yKm + half),
+            localKmToLngLat(center, minXKm, yKm - half)
+        ];
+    }
+    function buildGridFeatureCollection(cells, center, cellKm = FIRE_GRID.cellKm) {
+        const groups = {
+            heat: cells.filter(cell => cell.state === STATE.HEAT),
+            burned: cells.filter(cell => cell.state === STATE.BURNED),
+            embers: cells.filter(cell => cell.state === STATE.EMBERS),
+            active: cells.filter(cell => cell.state === STATE.ACTIVE)
+        };
+        const features = [];
+        for (const [state, group] of Object.entries(groups)) {
+            if (!group.length)
+                continue;
+            const runsByFuel = new Map();
+            for (const component of connectedComponents(group)) {
+                for (const run of buildHorizontalRuns(component)) {
+                    const fuel = dominantFuel(run);
+                    if (!runsByFuel.has(fuel))
+                        runsByFuel.set(fuel, []);
+                    runsByFuel.get(fuel).push(run);
+                }
+            }
+            for (const [fuel, runs] of runsByFuel) {
+                const polygons = runs.map(run => [buildRunRing(center, run, cellKm)]);
+                const flatCells = runs.flat();
+                const maxIntensity = flatCells.reduce((value, cell) => Math.max(value, cell.intensity, cell.heat), 0);
+                features.push({
+                    type: "Feature",
+                    properties: {
+                        id: `${state}-${fuel}`,
+                        state,
+                        fuel,
+                        intensity: Number(maxIntensity.toFixed(3)),
+                        cellCount: flatCells.length
+                    },
+                    geometry: {
+                        type: polygons.length === 1 ? "Polygon" : "MultiPolygon",
+                        coordinates: polygons.length === 1 ? polygons[0] : polygons
+                    }
+                });
+            }
+        }
+        return { type: "FeatureCollection", features };
+    }
     function median(values) {
         if (!values.length)
             return 0;
@@ -309,7 +462,11 @@
             geometry: { type: "Polygon", coordinates }
         };
     }
-    function buildFireFeatureCollection(cells, center) {
+    function buildFireFeatureCollection(cells, center, renderMode = DEFAULT_FIRE_RENDER_MODE, options = {}) {
+        const mode = normalizeRenderMode(renderMode);
+        if (mode === FIRE_RENDER_MODES.GRID) {
+            return buildGridFeatureCollection(cells, center, options.cellKm ?? FIRE_GRID.cellKm);
+        }
         const groups = {
             heat: cells.filter(cell => cell.state === STATE.HEAT),
             burned: cells.filter(cell => cell.state === STATE.BURNED),
@@ -372,6 +529,9 @@
         };
     }
     function buildIgnitionFeatureCollection(center) {
+        if (!center) {
+            return { type: "FeatureCollection", features: [] };
+        }
         return {
             type: "FeatureCollection",
             features: [
@@ -386,13 +546,14 @@
     function buildFireSimulationFrame(step, options = {}) {
         const tick = Math.max(0, Number(step) || 0);
         const center = normalizeCenter(options.center);
+        const renderMode = normalizeRenderMode(options.renderMode);
         const cells = simulateFireCells(tick, options.fuelOverrides);
         const windSpeed = Math.round(WIND_MODEL.speedKmh + Math.sin(tick * 0.18) * 5);
         return {
             step: tick,
             center,
             cells,
-            zones: buildFireFeatureCollection(cells, center),
+            zones: buildFireFeatureCollection(cells, center, renderMode),
             emitters: buildFireEmitters(cells, center),
             stats: summarizeFireStats(cells),
             wind: {
@@ -402,14 +563,15 @@
             }
         };
     }
-    function buildFireSimulationFrameFromState(state) {
+    function buildFireSimulationFrameFromState(state, options = {}) {
         const center = normalizeCenter(state.center);
+        const renderMode = normalizeRenderMode(options.renderMode);
         const windSpeed = Math.round(WIND_MODEL.speedKmh + Math.sin(state.step * 0.18) * 5);
         return {
             step: state.step,
             center,
             cells: state.cells,
-            zones: buildFireFeatureCollection(state.cells, center),
+            zones: buildFireFeatureCollection(state.cells, center, renderMode),
             emitters: buildFireEmitters(state.cells, center),
             stats: summarizeFireStats(state.cells),
             wind: {
@@ -559,12 +721,36 @@
     function buildFireLegendItems() {
         return FIRE_LEGEND_ITEMS.map(item => ({ ...item }));
     }
+    function resolveFireZones(frame, renderMode = DEFAULT_FIRE_RENDER_MODE) {
+        const mode = normalizeRenderMode(renderMode);
+        const empty = { type: "FeatureCollection", features: [] };
+        if (!frame)
+            return empty;
+        if (mode === FIRE_RENDER_MODES.GRID && frame.incidentSeed != null && frame.zones?.features?.length) {
+            return frame.zones;
+        }
+        const cells = Array.isArray(frame.cells) && frame.cells.length
+            ? frame.cells
+            : null;
+        if (!cells)
+            return frame.zones || empty;
+        const normalized = normalizeFrameCells(cells, frame.center, frame.cellKm);
+        if (!normalized.length)
+            return frame.zones || empty;
+        return buildFireFeatureCollection(normalized, frame.center, mode, { cellKm: frame.cellKm ?? FIRE_GRID.cellKm });
+    }
+    function getFireRenderModeLabel(mode) {
+        return normalizeRenderMode(mode) === FIRE_RENDER_MODES.GRID ? "Grille" : "Blob";
+    }
     const api = {
         DEFAULT_FIRE_CENTER,
+        DEFAULT_FIRE_RENDER_MODE,
         FIRE_COLORS,
         FIRE_GRID,
+        FIRE_RENDER_MODES,
         FIRE_SOURCE_ID,
         IGNITION_SOURCE_ID,
+        buildFireFeatureCollection,
         buildFireLayerDefinitions,
         buildFireLegendItems,
         buildFireSimulationFrame,
@@ -572,10 +758,15 @@
         buildIgnitionFeatureCollection,
         classifyRenderedFuel,
         createFireSimulationState,
+        createIdleFireSimulationState,
         createRenderedFuelOverrides,
         advanceFireSimulationState,
+        getFireRenderModeLabel,
         localKmToLngLat,
-        resetFireSimulationState
+        normalizeFrameCells,
+        normalizeRenderMode,
+        resetFireSimulationState,
+        resolveFireZones
     };
     global.FireLogisticsFire = api;
     if (typeof module !== "undefined" && module.exports)

@@ -10,23 +10,26 @@ public sealed class FireRuntimeController
     private const int SampleWidth = 129;
     private const int SampleHeight = 97;
     private const int SampleMargin = 14;
-    private FireSimulationState _state = FireSimulator.Create(DefaultLongitude, DefaultLatitude);
+    private FireSimulationState _state = FireSimulator.Create(DefaultLongitude, DefaultLatitude, igniteOnStart: false);
     private int? _sampleOriginX;
     private int? _sampleOriginY;
     private int? _sampleWidth;
     private int? _sampleHeight;
     private bool _sampleRequestPending;
+    private bool _hasIgnition;
     private double _tickTimer;
     private int _revision = 1;
     private string _reason = "initial";
 
-    public bool Running { get; private set; } = true;
+    public bool Running { get; private set; }
 
     public FireSimulationFrame CurrentFrame => FireFrameBuilder.Build(_state, CurrentStatus, _revision, _reason);
 
-    private string CurrentStatus => Running
-        ? "running"
-        : _state.IsAlive ? "paused" : "extinguished";
+    private string CurrentStatus => !_hasIgnition
+        ? "idle"
+        : Running
+            ? "running"
+            : _state.IsAlive ? "paused" : "extinguished";
 
     public bool Advance(double deltaSeconds)
     {
@@ -74,6 +77,11 @@ public sealed class FireRuntimeController
 
     public void Reset()
     {
+        if (!_hasIgnition)
+        {
+            return;
+        }
+
         _state = FireSimulator.Create(_state.Environment.Longitude, _state.Environment.Latitude);
         _tickTimer = 0;
         ClearSampleState();
@@ -81,10 +89,24 @@ public sealed class FireRuntimeController
         ResetRevision("reset");
     }
 
+    public void Clear()
+    {
+        _state = FireSimulator.Create(
+            _state.Environment.Longitude,
+            _state.Environment.Latitude,
+            igniteOnStart: false);
+        _tickTimer = 0;
+        _hasIgnition = false;
+        ClearSampleState();
+        Running = false;
+        ResetRevision("clear");
+    }
+
     public void SetIgnitionCenter(double longitude, double latitude)
     {
         _state = FireSimulator.Create(longitude, latitude);
         _tickTimer = 0;
+        _hasIgnition = true;
         ClearSampleState();
         Running = _state.IsAlive;
         ResetRevision("ignition");
@@ -134,6 +156,11 @@ public sealed class FireRuntimeController
 
     private bool NeedsFuelSample()
     {
+        if (!_hasIgnition || !_state.IsAlive)
+        {
+            return false;
+        }
+
         if (!_sampleOriginX.HasValue || !_sampleOriginY.HasValue || !_sampleWidth.HasValue || !_sampleHeight.HasValue)
         {
             return true;

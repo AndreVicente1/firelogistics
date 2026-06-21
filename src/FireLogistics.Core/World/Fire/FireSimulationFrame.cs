@@ -7,6 +7,7 @@ public sealed record FireSimulationFrame(
     double[] Center,
     int IncidentSeed,
     FireFeatureCollection Zones,
+    IReadOnlyList<WireFireCell> Cells,
     IReadOnlyList<FireEmitter> Emitters,
     FireStats Stats,
     FireWind Wind,

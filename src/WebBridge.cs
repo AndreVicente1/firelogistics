@@ -133,6 +133,10 @@ public partial class WebBridge : Node
         {
             _fireRuntime.Reset();
         }
+        else if (string.Equals(command, "clear", StringComparison.OrdinalIgnoreCase))
+        {
+            _fireRuntime.Clear();
+        }
     }
 
     private void HandleFireIgnitionSelected(JsonElement? payload)

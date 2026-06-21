@@ -19,6 +19,7 @@ public static class FireFrameBuilder
             [state.Environment.Longitude, state.Environment.Latitude],
             state.Environment.IncidentSeed,
             BuildFeatureCollection(state),
+            BuildCells(state),
             BuildEmitters(state),
             BuildStats(state),
             new FireWind(
@@ -26,6 +27,20 @@ public static class FireFrameBuilder
                 72,
                 (int)Math.Round(state.Environment.BaseWindSpeedKmh + Math.Sin(state.Step * 0.18) * 5)),
             status ?? (state.IsAlive ? "running" : "extinguished"));
+    }
+
+    private static IReadOnlyList<WireFireCell> BuildCells(FireSimulationState state)
+    {
+        return state.Cells.Values
+            .Where(cell => cell.State is FireCellState.Heat or FireCellState.Active or FireCellState.Embers or FireCellState.Burned)
+            .Select(cell => new WireFireCell(
+                cell.Coordinate.X,
+                cell.Coordinate.Y,
+                ToWireName(cell.Fuel),
+                ToWireName(cell.State),
+                Math.Round(cell.Intensity, 3),
+                Math.Round(cell.Heat, 3)))
+            .ToList();
     }
 
     private static FireFeatureCollection BuildFeatureCollection(FireSimulationState state)

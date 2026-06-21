@@ -151,6 +151,45 @@ public sealed class FireSimulationTests
         Assert.Equal("tick", frame.Reason);
     }
 
+    [Fact]
+    public void FireFrameIncludesVisibleCellsForClientRendering()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(state, 40);
+
+        FireSimulationFrame frame = FireFrameBuilder.Build(state);
+
+        Assert.NotEmpty(frame.Cells);
+        Assert.All(frame.Cells, cell => Assert.False(string.IsNullOrWhiteSpace(cell.State)));
+        Assert.Contains(frame.Cells, cell => cell.State == "active");
+    }
+
+    [Fact]
+    public void CreateCanStartWithoutAutoIgnition()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42, igniteOnStart: false);
+
+        Assert.False(state.IsAlive);
+        Assert.Empty(state.Cells);
+    }
+
+    [Fact]
+    public void ClearRebuildCreatesIdleStateWithoutCells()
+    {
+        FireSimulationState active = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+        FireSimulator.Advance(active, 20);
+        Assert.True(active.IsAlive);
+
+        FireSimulationState cleared = FireSimulator.Create(
+            active.Environment.Longitude,
+            active.Environment.Latitude,
+            igniteOnStart: false);
+
+        Assert.False(cleared.IsAlive);
+        Assert.Empty(cleared.Cells);
+        Assert.Empty(FireFrameBuilder.Build(cleared).Zones.Features);
+    }
+
     private static string Snapshot(FireSimulationState state)
     {
         return string.Join(

@@ -15,7 +15,7 @@ Supported JS -> C# actions:
 - `diagnostics_log`: logs a diagnostic payload in Godot.
 - `quit_game`: asks Godot to quit the current tree.
 - `fire_ignition_selected`: reports a selected ignition center as `{ "center": [longitude, latitude] }`.
-- `fire_command`: controls the Core fire runtime with `{ "command": "pause" | "resume" | "reset" }`.
+- `fire_command`: controls the Core fire runtime with `{ "command": "pause" | "resume" | "reset" | "clear" }`.
 - `fire_fuel_overrides_ready`: reports optional rendered-map fuels as `{ "originX": number, "originY": number, "width": number, "height": number, "cellKm": number, "fuels": string[] }`. This message may be sent repeatedly; C# merges the samples into the current incident instead of resetting it.
 
 C# publishes the authoritative fire simulation frame by evaluating:
@@ -35,6 +35,7 @@ window.FireLogistics.receiveFireFrame(frame)
   "incidentSeed": 1,
   "zones": { "type": "FeatureCollection", "features": [] },
   "emitters": [],
+  "cells": [],
   "stats": {
     "burnedHectares": 0,
     "frontKilometers": 0,
@@ -48,13 +49,20 @@ window.FireLogistics.receiveFireFrame(frame)
 }
 ```
 
-`status` is `"running"`, `"paused"`, or `"extinguished"`. The browser must use the C# frame status as authoritative and must not advance or rebuild the fire locally while connected to Godot.
+`status` is `"idle"`, `"running"`, `"paused"`, or `"extinguished"`. `"idle"` means no incident is active yet. The browser must use the C# frame status as authoritative and must not advance or rebuild the fire locally while connected to Godot.
 
 `revision` is monotonic within an incident and `reason` explains why the frame was published (`"initial"`, `"tick"`, `"command"`, `"reset"`, `"ignition"`, or `"fuel_sample"`). The browser must apply only the newest Core frame for an incident and coalesce multiple received frames so MapLibre is updated at most once per browser animation frame.
 
 `zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells.
 
-Each zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface`, `burned-surface`) so the browser can diff updates.
+`cells` is an optional compact array of rendered fire cells (`{ "x", "y", "fuel", "state", "intensity", "heat" }`) used by the browser to rebuild zones in blob mode without re-simulating locally. C# must publish it on every Core frame.
+
+The browser may switch fire rendering between:
+
+- `blob`: smooth tactical envelope built client-side from `cells`
+- `grid`: rectangular cell runs; Core frames may reuse authoritative `zones` directly
+
+Each zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface`, `burned-surface` for blob mode, or `{state}-{fuel}` for grid mode) so the browser can diff updates.
 
 ## Fire map rendering
 

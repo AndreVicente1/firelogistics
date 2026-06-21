@@ -4,10 +4,13 @@ public sealed class FireSimulationState
 {
     private readonly Dictionary<FireGridCoordinate, FireCell> _cells = [];
 
-    public FireSimulationState(FireEnvironment environment)
+    public FireSimulationState(FireEnvironment environment, bool igniteOnStart = true)
     {
         Environment = environment;
-        IgniteInitialCells();
+        if (igniteOnStart)
+        {
+            IgniteInitialCells();
+        }
     }
 
     public FireEnvironment Environment { get; }

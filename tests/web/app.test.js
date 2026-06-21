@@ -167,7 +167,8 @@ test("received Core fire frames update both ignition and terrain-draped fire zon
   const {
     FIRE_SOURCE_ID,
     applyFireFrameToSources,
-    buildFireSimulationFrame
+    buildFireSimulationFrame,
+    resolveFireZones
   } = require("../../assets/web/js/app.js");
   const frame = buildFireSimulationFrame(3);
   const calls = {};
@@ -183,7 +184,7 @@ test("received Core fire frames update both ignition and terrain-draped fire zon
 
   applyFireFrameToSources(map, frame, frame.center);
 
-  assert.equal(calls[FIRE_SOURCE_ID], frame.zones);
+  assert.deepEqual(calls[FIRE_SOURCE_ID], resolveFireZones(frame));
   assert.equal(calls["wildfire-ignition"].features[0].geometry.coordinates[0], frame.center[0]);
 });
 
@@ -289,6 +290,38 @@ test("Core mode buttons derive commands from authoritative frame status", () => 
   assert.equal(getCoreToggleCommand({ status: "running" }), "pause");
   assert.equal(getCoreToggleCommand({ status: "paused" }), "resume");
   assert.equal(getCoreToggleCommand({ status: "extinguished" }), "pause");
+  assert.equal(getCoreToggleCommand({ status: "idle" }), "pause");
+});
+
+test("idle fire frame exposes no ignition marker or zones", () => {
+  const {
+    applyFireFrameToSources,
+    createEmptyFireFrame
+  } = require("../../assets/web/js/app.js");
+  const frame = createEmptyFireFrame(null);
+  const calls = {};
+  const map = {
+    getSource(id) {
+      return {
+        setData(data) {
+          calls[id] = data;
+        }
+      };
+    }
+  };
+
+  applyFireFrameToSources(map, frame, null);
+
+  assert.equal(frame.status, "idle");
+  assert.deepEqual(calls["wildfire-zones"], { type: "FeatureCollection", features: [] });
+  assert.deepEqual(calls["wildfire-ignition"], { type: "FeatureCollection", features: [] });
+});
+
+test("createIdleFireSimulationState starts without active cells", () => {
+  const { createIdleFireSimulationState } = require("../../assets/web/js/fire-simulation.js");
+  const state = createIdleFireSimulationState({ center: [5.38, 43.3] });
+
+  assert.equal(state.cells.filter(cell => cell.state === "active").length, 0);
 });
 
 test("incident seed changes require clearing fire effects", () => {
@@ -322,6 +355,56 @@ test("rendered fuel samples include explicit sparse-grid origin", () => {
   assert.equal(sample.width, 3);
   assert.equal(sample.height, 2);
   assert.deepEqual(sample.fuels, ["water", "water", "water", "water", "water", "water"]);
+});
+
+test("wildfire render mode toggle switches between blob and grid geometry", () => {
+  const {
+    FIRE_RENDER_MODES,
+    buildFireSimulationFrame,
+    resolveFireZones
+  } = require("../../assets/web/js/app.js");
+
+  const blobFrame = buildFireSimulationFrame(40, { renderMode: FIRE_RENDER_MODES.BLOB });
+  const gridFrame = buildFireSimulationFrame(40, { renderMode: FIRE_RENDER_MODES.GRID });
+  const resolvedBlob = resolveFireZones(blobFrame, FIRE_RENDER_MODES.BLOB);
+  const resolvedGrid = resolveFireZones(gridFrame, FIRE_RENDER_MODES.GRID);
+
+  assert.ok(blobFrame.zones.features.length > 0);
+  assert.ok(gridFrame.zones.features.length > 0);
+  assert.ok(blobFrame.zones.features.every(feature => feature.geometry.coordinates[0].length > 12));
+  assert.ok(gridFrame.zones.features.some(feature => feature.geometry.coordinates[0].length <= 6));
+  assert.ok(resolvedBlob.features.every(feature => feature.geometry.coordinates[0].length > 12));
+  assert.ok(resolvedGrid.features.some(feature => feature.geometry.coordinates[0].length <= 6));
+});
+
+test("resolveFireZones can rebuild blob zones from Core wire cells", () => {
+  const { FIRE_RENDER_MODES, resolveFireZones } = require("../../assets/web/js/app.js");
+  const frame = {
+    center: [5.38, 43.3],
+    incidentSeed: 42,
+    zones: {
+      type: "FeatureCollection",
+      features: [{
+        type: "Feature",
+        properties: { id: "active-forest", state: "active", fuel: "forest", intensity: 0.8, cellCount: 2 },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[[5.38, 43.3], [5.39, 43.3], [5.39, 43.31], [5.38, 43.31], [5.38, 43.3]]]
+        }
+      }]
+    },
+    cells: [
+      { x: 0, y: 0, fuel: "forest", state: "active", intensity: 0.8, heat: 1 },
+      { x: 1, y: 0, fuel: "forest", state: "active", intensity: 0.7, heat: 0.9 }
+    ]
+  };
+
+  const blobZones = resolveFireZones(frame, FIRE_RENDER_MODES.BLOB);
+  const gridZones = resolveFireZones(frame, FIRE_RENDER_MODES.GRID);
+
+  assert.equal(gridZones, frame.zones);
+  assert.ok(blobZones.features.length > 0);
+  assert.ok(blobZones.features.every(feature => feature.geometry.coordinates[0].length > 12));
 });
 
 test("wildfire exposes nearby buildings without making water or mineral burn", () => {
