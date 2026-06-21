@@ -41,3 +41,13 @@ test("prototype fire simulation remains documented until moved to Core", () => {
   assert.match(contracts, /JavaScript fire simulation as a prototype/);
   assert.match(contracts, /FireLogistics\.Core/);
 });
+
+test("Core fire runtime IPC messages are documented", () => {
+  const contracts = fs.readFileSync(path.join(root, "docs", "contracts.md"), "utf8");
+
+  assert.match(contracts, /fire_command/);
+  assert.match(contracts, /fire_fuel_overrides_ready/);
+  assert.match(contracts, /receiveFireFrame/);
+  assert.match(contracts, /incidentSeed/);
+  assert.match(contracts, /must not use inner rings/);
+});

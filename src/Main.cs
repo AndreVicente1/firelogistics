@@ -37,6 +37,8 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        _webBridge?.ProcessFire(delta);
+
         _metricsTimer += delta;
         if (_metricsTimer < 0.5)
         {

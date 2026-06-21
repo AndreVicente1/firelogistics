@@ -15,6 +15,38 @@ Supported JS -> C# actions:
 - `diagnostics_log`: logs a diagnostic payload in Godot.
 - `quit_game`: asks Godot to quit the current tree.
 - `fire_ignition_selected`: reports a selected ignition center as `{ "center": [longitude, latitude] }`.
+- `fire_command`: controls the Core fire runtime with `{ "command": "pause" | "resume" | "reset" }`.
+- `fire_fuel_overrides_ready`: reports optional rendered-map fuels as `{ "width": number, "height": number, "cellKm": number, "fuels": string[] }`.
+
+C# publishes the authoritative fire simulation frame by evaluating:
+
+```js
+window.FireLogistics.receiveFireFrame(frame)
+```
+
+`frame` has this shape:
+
+```json
+{
+  "step": 0,
+  "center": [5.38, 43.3],
+  "incidentSeed": 1,
+  "zones": { "type": "FeatureCollection", "features": [] },
+  "emitters": [],
+  "stats": {
+    "burnedHectares": 0,
+    "frontKilometers": 0,
+    "intensity": "Moderee",
+    "activeCells": 0,
+    "threatenedBuildings": 0,
+    "fuelImpacts": {}
+  },
+  "wind": { "direction": "E-NE", "degrees": 72, "speedKmh": 28 },
+  "status": "running"
+}
+```
+
+`zones` remains GeoJSON for MapLibre. Fire polygons are exterior-filled tactical surfaces; they must not use inner rings to create donut-shaped active fronts.
 
 C# publishes runtime metrics by evaluating:
 

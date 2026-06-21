@@ -314,17 +314,6 @@
     const outerRadii = shape.radii.map(radius => radius + radiusPaddingKm);
     const coordinates = [ringFromRadii(center, shape.centroid, outerRadii)];
 
-    if (innerCells && innerCells.length) {
-      const innerShape = buildSmoothBlobShape(innerCells, state, shape.centroid);
-      if (innerShape) {
-        const holeRadii = innerShape.radii.map((radius, i) => Math.min(radius, outerRadii[i] * 0.9));
-        if (median(holeRadii) > FIRE_GRID.cellKm * 0.8) {
-          const holeRing = ringFromRadii(center, shape.centroid, holeRadii).reverse();
-          coordinates.push(holeRing);
-        }
-      }
-    }
-
     const maxIntensity = cells.reduce((value, cell) => Math.max(value, cell.intensity, cell.heat), 0);
     return {
       type: "Feature",
@@ -346,11 +335,10 @@
       embers: cells.filter(cell => cell.state === STATE.EMBERS),
       active: cells.filter(cell => cell.state === STATE.ACTIVE)
     };
-    const burnedInterior = groups.burned.concat(groups.embers);
     const features = [];
     for (const [state, group] of Object.entries(groups)) {
       const padding = state === "heat" ? 0.34 : state === "active" ? 0.18 : 0.15;
-      const innerCells = state === "active" ? burnedInterior : null;
+      const innerCells = null;
       const feature = buildSmoothBlobFeature(group, state, center, padding, innerCells);
       if (feature) features.push(feature);
     }

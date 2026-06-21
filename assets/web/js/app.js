@@ -172,6 +172,14 @@
             button.textContent = enabled ? "Cliquer carte" : "Choisir depart";
         setText("phase-value", enabled ? "Choix depart" : "Incident");
     }
+    function applyFireFrameToSources(map, frame, ignitionCenter) {
+        const fireSource = map?.getSource?.(Fire.FIRE_SOURCE_ID);
+        const ignitionSource = map?.getSource?.(Fire.IGNITION_SOURCE_ID);
+        if (fireSource?.setData)
+            fireSource.setData(frame.zones);
+        if (ignitionSource?.setData)
+            ignitionSource.setData(Fire.buildIgnitionFeatureCollection(ignitionCenter));
+    }
     function buildFranceWorldStyle() {
         const baseLayers = [
             { id: "background", type: "background", paint: { "background-color": "#0f1413" } },
@@ -296,6 +304,7 @@
         }
     }
     function createFireSimulation(map) {
+        const usesCoreSimulation = Boolean(global.godot?.ipc || global.GodotBridge?.postMessage);
         let running = true;
         let center = Fire.DEFAULT_FIRE_CENTER;
         let fuelOverrides = null;
@@ -305,12 +314,11 @@
         const fireSource = map.getSource(Fire.FIRE_SOURCE_ID);
         const ignitionSource = map.getSource(Fire.IGNITION_SOURCE_ID);
         function publish() {
-            const nextFireSource = map.getSource(Fire.FIRE_SOURCE_ID) || fireSource;
-            const nextIgnitionSource = map.getSource(Fire.IGNITION_SOURCE_ID) || ignitionSource;
-            if (nextFireSource?.setData)
-                nextFireSource.setData(frame.zones);
-            if (nextIgnitionSource?.setData)
-                nextIgnitionSource.setData(Fire.buildIgnitionFeatureCollection(center));
+            applyFireFrameToSources({
+                getSource(id) {
+                    return map.getSource(id) || (id === Fire.FIRE_SOURCE_ID ? fireSource : ignitionSource);
+                }
+            }, frame, center);
             updateFireHud(frame, running);
         }
         function rebuildFrame() {
@@ -329,9 +337,22 @@
             const renderedOverrides = Fire.createRenderedFuelOverrides(map, center);
             if (!renderedOverrides)
                 return;
+            if (usesCoreSimulation) {
+                sendToGodot("fire_fuel_overrides_ready", {
+                    width: Fire.FIRE_GRID.width,
+                    height: Fire.FIRE_GRID.height,
+                    cellKm: Fire.FIRE_GRID.cellKm,
+                    fuels: renderedOverrides
+                });
+                return;
+            }
             rebuildStateWithFuelOverrides(renderedOverrides);
         }
         function animate(now) {
+            if (usesCoreSimulation) {
+                global.requestAnimationFrame(animate);
+                return;
+            }
             if (running && now - lastTick > 720) {
                 lastTick = now;
                 Fire.advanceFireSimulationState(state);
@@ -347,13 +368,28 @@
             getFrame() {
                 return frame;
             },
+            receiveFrame(nextFrame) {
+                if (!nextFrame)
+                    return;
+                frame = nextFrame;
+                running = nextFrame.status !== "extinguished" && running;
+                publish();
+            },
             toggle() {
                 running = !running;
+                if (usesCoreSimulation) {
+                    sendToGodot("fire_command", { command: running ? "resume" : "pause" });
+                }
                 updateFireHud(frame, running);
                 return running;
             },
             reset() {
                 running = true;
+                if (usesCoreSimulation) {
+                    sendToGodot("fire_command", { command: "reset" });
+                    updateFireHud(frame, running);
+                    return;
+                }
                 state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
                 rebuildFrame();
             },
@@ -425,6 +461,9 @@
         fireController: null,
         selectingIgnition: false,
         sendToGodot,
+        receiveFireFrame(frame) {
+            api.fireController?.receiveFrame(frame);
+        },
         updateRuntimeMetrics(metrics) {
             document.getElementById("fps-value").textContent = String(metrics?.fps ?? "--");
             document.getElementById("ram-value").textContent = formatBytes(metrics?.ramBytes);
@@ -466,6 +505,7 @@
             buildFireLayerDefinitions: Fire.buildFireLayerDefinitions,
             buildFireLegendItems: Fire.buildFireLegendItems,
             buildFireSimulationFrame: Fire.buildFireSimulationFrame,
+            applyFireFrameToSources,
             buildFranceWorldStyle,
             buildFuelLayerDefinitions,
             buildFuelLegendItems,

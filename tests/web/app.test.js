@@ -128,6 +128,40 @@ test("wildfire simulation frame expands deterministically", () => {
   assert.equal(later.wind.direction, "E-NE");
 });
 
+test("wildfire polygons are filled surfaces without donut holes", () => {
+  const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
+
+  const frame = buildFireSimulationFrame(80);
+
+  assert.ok(frame.zones.features.length > 0);
+  assert.ok(frame.zones.features.every(feature => feature.geometry.type === "Polygon"));
+  assert.ok(frame.zones.features.every(feature => feature.geometry.coordinates.length === 1));
+});
+
+test("received Core fire frames update MapLibre sources", () => {
+  const {
+    FIRE_SOURCE_ID,
+    applyFireFrameToSources,
+    buildFireSimulationFrame
+  } = require("../../assets/web/js/app.js");
+  const frame = buildFireSimulationFrame(3);
+  const calls = {};
+  const map = {
+    getSource(id) {
+      return {
+        setData(data) {
+          calls[id] = data;
+        }
+      };
+    }
+  };
+
+  applyFireFrameToSources(map, frame, frame.center);
+
+  assert.equal(calls[FIRE_SOURCE_ID], frame.zones);
+  assert.equal(calls["wildfire-ignition"].features[0].geometry.coordinates[0], frame.center[0]);
+});
+
 test("wildfire exposes nearby buildings without making water or mineral burn", () => {
   const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
 
