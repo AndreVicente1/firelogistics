@@ -12,7 +12,6 @@ test("runtime web assets required by the WebView are present", () => {
     "assets/web/js/app.js",
     "assets/web/js/fire-model.js",
     "assets/web/js/fire-simulation.js",
-    "assets/web/js/fire-effects.js",
     "assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.js",
     "assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.css",
     "assets/web/vendor/pmtiles@4.4.1/pmtiles.js"
@@ -56,5 +55,7 @@ test("Core fire runtime IPC messages are documented", () => {
   assert.match(contracts, /reason/);
   assert.match(contracts, /paused/);
   assert.match(contracts, /MultiPolygon/);
-  assert.match(contracts, /must not use inner rings/);
+  assert.match(contracts, /updateData/);
+  assert.match(contracts, /promoteId/);
+  assert.match(contracts, /heat-surface/);
 });

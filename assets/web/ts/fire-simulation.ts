@@ -305,7 +305,23 @@
       return localKmToLngLat(center, centroid.xKm + Math.cos(angle) * radius, centroid.yKm + Math.sin(angle) * radius);
     });
     ring.push(ring[0]);
-    return ring;
+    return densifyRing(ring, 2);
+  }
+
+  function densifyRing(ring, stepsPerSegment) {
+    if (!ring?.length || ring.length < 2 || stepsPerSegment < 2) return ring;
+    const dense = [];
+    for (let i = 0; i < ring.length - 1; i++) {
+      const a = ring[i];
+      const b = ring[i + 1];
+      dense.push(a);
+      for (let step = 1; step < stepsPerSegment; step++) {
+        const t = step / stepsPerSegment;
+        dense.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    }
+    dense.push(ring[ring.length - 1]);
+    return dense;
   }
 
   function buildSmoothBlobFeature(cells, state, center, radiusPaddingKm, innerCells) {
@@ -490,7 +506,8 @@
         filter: ["==", ["get", "state"], "heat"],
         paint: {
           "fill-color": FIRE_COLORS.heat,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 6, 0.04, 10, 0.08, 14, 0.12]
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.06, 12, 0.1, 15, 0.14],
+          "fill-antialias": true
         }
       },
       {
@@ -498,7 +515,19 @@
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "active"],
-        paint: { "fill-color": FIRE_COLORS.active, "fill-opacity": 0.66 }
+        paint: {
+          "fill-color": [
+            "interpolate",
+            ["linear"],
+            ["coalesce", ["get", "intensity"], 0.5],
+            0, "#ff7a18",
+            0.5, "#ff4400",
+            0.8, "#e51d00",
+            1, "#b00d00"
+          ],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.74, 12, 0.82, 15, 0.88],
+          "fill-antialias": true
+        }
       },
       {
         id: "fire-active-glow",
@@ -506,10 +535,10 @@
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "active"],
         paint: {
-          "line-color": "#ffb21f",
-          "line-opacity": 0.9,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 6, 4, 11, 12, 15, 28],
-          "line-blur": ["interpolate", ["linear"], ["zoom"], 6, 5, 11, 12, 15, 22]
+          "line-color": "#ffd24a",
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.85, 13, 0.92, 16, 0.96],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1.6, 12, 3, 16, 6],
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 12, 1, 16, 1.6]
         }
       },
       {
@@ -517,14 +546,22 @@
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "embers"],
-        paint: { "fill-color": FIRE_COLORS.embers, "fill-opacity": 0.22 }
+        paint: {
+          "fill-color": FIRE_COLORS.embers,
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 12, 0.58, 15, 0.64],
+          "fill-antialias": true
+        }
       },
       {
         id: "fire-burn-scar",
         type: "fill",
         source: FIRE_SOURCE_ID,
         filter: ["==", ["get", "state"], "burned"],
-        paint: { "fill-color": FIRE_COLORS.burned, "fill-opacity": 0.82 }
+        paint: {
+          "fill-color": FIRE_COLORS.burned,
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.74, 12, 0.82, 15, 0.88],
+          "fill-antialias": true
+        }
       },
       {
         id: "fire-perimeter",
@@ -533,9 +570,9 @@
         filter: ["in", ["get", "state"], ["literal", ["burned", "embers", "active"]]],
         paint: {
           "line-color": FIRE_COLORS.perimeter,
-          "line-opacity": 0.46,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.2, 11, 3.2, 15, 7],
-          "line-blur": ["interpolate", ["linear"], ["zoom"], 6, 1.5, 11, 3, 15, 7]
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.65, 12, 0.78, 15, 0.88],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1.4, 12, 2.6, 16, 4],
+          "line-blur": 0.4
         }
       },
       {

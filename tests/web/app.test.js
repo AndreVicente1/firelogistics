@@ -86,6 +86,7 @@ test("map style includes tactical wildfire layers above terrain and below roads"
   const layerIds = style.layers.map(layer => layer.id);
 
   assert.equal(style.sources[FIRE_SOURCE_ID].type, "geojson");
+  assert.equal(style.sources[FIRE_SOURCE_ID].promoteId, "id");
   assert.equal(style.sources[FIRE_SOURCE_ID].data.type, "FeatureCollection");
   assert.deepEqual(style.sources[FIRE_SOURCE_ID].data.features, []);
   assert.deepEqual(fireLayers.map(layer => layer.id), [
@@ -97,7 +98,7 @@ test("map style includes tactical wildfire layers above terrain and below roads"
     "fire-perimeter",
     "wildfire-ignition"
   ]);
-  assert.equal(fireLayers.find(layer => layer.id === "fire-active-core").paint["fill-color"], FIRE_COLORS.active);
+  assert.match(JSON.stringify(fireLayers.find(layer => layer.id === "fire-active-core").paint["fill-color"]), /intensity/);
   assert.equal(fireLayers.find(layer => layer.id === "fire-burn-scar").paint["fill-color"], FIRE_COLORS.burned);
 
   const firstFireIndex = layerIds.indexOf("fire-heat");
@@ -138,33 +139,31 @@ test("wildfire polygons are filled surfaces without donut holes", () => {
   assert.ok(frame.zones.features.every(feature => feature.geometry.coordinates.length === 1));
 });
 
-test("fire surface renderer groups adjacent rectangles into one organic blob", () => {
-  const { buildSurfaceBlobs } = require("../../assets/web/js/fire-effects.js");
-  const feature = {
-    geometry: {
-      type: "MultiPolygon",
-      coordinates: [
-        [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
-        [[[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]]],
-        [[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]]
-      ]
-    },
-    properties: { state: "active" }
-  };
-  const map = {
-    project(lngLat) {
-      return { x: lngLat[0] * 10, y: lngLat[1] * 10 };
-    }
-  };
+test("fire layers render natively from the GeoJSON source draped on terrain", () => {
+  const {
+    FIRE_SOURCE_ID,
+    buildFireLayerDefinitions
+  } = require("../../assets/web/js/app.js");
 
-  const blobs = buildSurfaceBlobs(map, [feature], "active");
+  const fireLayers = buildFireLayerDefinitions();
+  const fillAndLineLayers = fireLayers.filter(layer => layer.type === "fill" || layer.type === "line");
 
-  assert.equal(blobs.length, 1);
-  assert.ok(blobs[0].points.length > 20);
-  assert.ok(blobs[0].points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y)));
+  assert.ok(fillAndLineLayers.length > 0);
+  assert.ok(fillAndLineLayers.every(layer => layer.source === FIRE_SOURCE_ID));
+  assert.ok(fireLayers.every(layer => layer.layout?.visibility !== "none"));
 });
 
-test("received Core fire frames update ignition without replacing fire source data", () => {
+test("active fire fill color is driven by feature intensity", () => {
+  const { buildFireLayerDefinitions } = require("../../assets/web/js/app.js");
+
+  const activeCore = buildFireLayerDefinitions().find(layer => layer.id === "fire-active-core");
+  const fillColor = JSON.stringify(activeCore.paint["fill-color"]);
+
+  assert.match(fillColor, /interpolate/);
+  assert.match(fillColor, /intensity/);
+});
+
+test("received Core fire frames update both ignition and terrain-draped fire zones", () => {
   const {
     FIRE_SOURCE_ID,
     applyFireFrameToSources,
@@ -184,36 +183,66 @@ test("received Core fire frames update ignition without replacing fire source da
 
   applyFireFrameToSources(map, frame, frame.center);
 
-  assert.equal(calls[FIRE_SOURCE_ID], undefined);
+  assert.equal(calls[FIRE_SOURCE_ID], frame.zones);
   assert.equal(calls["wildfire-ignition"].features[0].geometry.coordinates[0], frame.center[0]);
 });
 
-test("fire zone updates are hashed without MapLibre setData churn", () => {
+test("fire zone updates use incremental updateData after the initial setData", () => {
   const {
     FIRE_SOURCE_ID,
     applyFireFrameToSources,
     buildFireSimulationFrame,
     createFireRenderState
   } = require("../../assets/web/js/app.js");
-  const frame = buildFireSimulationFrame(3);
+  const initial = buildFireSimulationFrame(3);
+  const later = buildFireSimulationFrame(8);
   const renderState = createFireRenderState();
-  let fireUpdates = 0;
+  let setDataCalls = 0;
+  let updateDataCalls = 0;
   const map = {
     __fireRenderState: renderState,
     getSource(id) {
       return {
         setData() {
-          if (id === FIRE_SOURCE_ID) fireUpdates += 1;
+          if (id === FIRE_SOURCE_ID) setDataCalls += 1;
+        },
+        updateData() {
+          if (id === FIRE_SOURCE_ID) updateDataCalls += 1;
         }
       };
     }
   };
 
-  assert.equal(applyFireFrameToSources(map, frame, frame.center), true);
-  assert.equal(applyFireFrameToSources(map, frame, frame.center), true);
+  applyFireFrameToSources(map, initial, initial.center);
+  applyFireFrameToSources(map, initial, initial.center);
+  applyFireFrameToSources(map, later, later.center);
 
-  assert.equal(fireUpdates, 0);
-  assert.equal(renderState.lastZonesHash, JSON.stringify(frame.zones));
+  assert.equal(setDataCalls, 1);
+  assert.equal(updateDataCalls, 1);
+  assert.equal(renderState.lastZonesHash, JSON.stringify(later.zones));
+});
+
+test("buildFireZonesDiff updates geometry for stable feature ids", () => {
+  const { buildFireZonesDiff } = require("../../assets/web/js/app.js");
+  const previous = [{
+    type: "Feature",
+    properties: { id: "active-surface", state: "active", intensity: 0.5 },
+    geometry: { type: "Polygon", coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] }
+  }];
+  const next = [{
+    type: "Feature",
+    properties: { id: "active-surface", state: "active", intensity: 0.8 },
+    geometry: { type: "Polygon", coordinates: [[[0, 0], [2, 0], [2, 2], [0, 0]]] }
+  }];
+
+  const diff = buildFireZonesDiff(previous, next);
+
+  assert.equal(diff.add.length, 0);
+  assert.equal(diff.removed.length, 0);
+  assert.equal(diff.update.length, 1);
+  assert.equal(diff.update[0].id, "active-surface");
+  assert.ok(diff.update[0].newGeometry);
+  assert.ok(diff.update[0].addOrUpdateProperties.some(entry => entry.key === "intensity"));
 });
 
 test("Core fire frames received before map init are kept pending", () => {

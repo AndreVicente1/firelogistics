@@ -18,7 +18,6 @@ $requiredAssets = @(
     "assets/web/js/app.js",
     "assets/web/js/fire-model.js",
     "assets/web/js/fire-simulation.js",
-    "assets/web/js/fire-effects.js",
     "assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.js",
     "assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.css",
     "assets/web/vendor/pmtiles@4.4.1/pmtiles.js"

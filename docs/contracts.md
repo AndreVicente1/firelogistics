@@ -54,6 +54,21 @@ window.FireLogistics.receiveFireFrame(frame)
 
 `zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells.
 
+Each zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface`, `burned-surface`) so the browser can diff updates.
+
+## Fire map rendering
+
+Fire is rendered exclusively with native MapLibre GL `fill`/`line` layers bound to the `wildfire-zones` GeoJSON source. There is no canvas overlay, smoke layer, or particle FX.
+
+The map style declares `promoteId: "id"` on `wildfire-zones`. The browser must:
+
+1. Call `setData(zones)` once when fire zones first appear for an incident.
+2. Call `updateData(diff)` on later ticks, updating geometry/properties by stable feature id.
+3. Call `updateData({ removeAll: true })` when an incident is cleared.
+4. Skip MapLibre writes when the zones hash is unchanged.
+
+Tactical layer ids (bottom to top): `fire-heat`, `fire-active-core`, `fire-active-glow`, `fire-ember-bed`, `fire-burn-scar`, `fire-perimeter`, `wildfire-ignition`. Layers drape on the terrain DEM.
+
 C# can ask the browser to resample rendered fuels around the moving front by evaluating:
 
 ```js
@@ -76,7 +91,6 @@ window.FireLogistics.updateRuntimeMetrics({ fps, ramBytes })
 - `assets/web/js/app.js`
 - `assets/web/js/fire-model.js`
 - `assets/web/js/fire-simulation.js`
-- `assets/web/js/fire-effects.js`
 - `assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.js`
 - `assets/web/vendor/maplibre-gl@4.7.1/maplibre-gl.css`
 - `assets/web/vendor/pmtiles@4.4.1/pmtiles.js`

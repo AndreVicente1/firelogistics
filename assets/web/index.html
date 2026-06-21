@@ -10,8 +10,6 @@
 <body>
   <main id="app">
     <section id="map" aria-label="Carte strategique Fire Logistics"></section>
-    <canvas id="fire-surfaces" aria-hidden="true"></canvas>
-    <canvas id="fire-effects" aria-hidden="true"></canvas>
     <aside class="hud" aria-label="Tableau de bord">
       <div class="brand">Fire Logistics</div>
       <div class="status-grid">
@@ -34,7 +32,7 @@
       </div>
       <div class="panel">
         <h1>Vue strategique</h1>
-        <p>La carte affiche les combustibles, le relief et un premier front de feu tactique avec fumee, braises, lisieres actives et zone deja brulee.</p>
+        <p>La carte affiche les combustibles, le relief et un perimetre de feu tactique avec front actif, braises et zone deja brulee.</p>
       </div>
       <div class="fire-panel">
         <div class="panel-heading">
@@ -80,7 +78,6 @@
   <script src="vendor/pmtiles@4.4.1/pmtiles.js"></script>
   <script src="js/fire-model.js"></script>
   <script src="js/fire-simulation.js"></script>
-  <script src="js/fire-effects.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
