@@ -37,13 +37,6 @@
         const key = cellKey(cell.x, cell.y);
         if (store.cells.has(key))
             return false;
-        while (store.cells.size >= MAX_RETAINED_BURNED_CELLS) {
-            const oldestKey = store.cells.keys().next().value;
-            if (!oldestKey)
-                break;
-            store.cells.delete(oldestKey);
-            store.pending.delete(oldestKey);
-        }
         store.cells.set(key, { x: cell.x, y: cell.y, fuel: cell.fuel });
         store.pending.add(key);
         store.revision += 1;
@@ -417,12 +410,7 @@
         return Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] ?? "unknown";
     }
     const BLOB_POINT_COUNT = 96;
-    const MAX_RETAINED_BURNED_CELLS = 6000;
     const MAX_LIVE_FIRE_CELLS = 8000;
-    const MAX_RENDERED_FIRE_CELLS = 12000;
-    const MAX_RENDERED_BURNED_CELLS = 3000;
-    const MAX_RENDERED_ZONE_CELLS = 2500;
-    const MAX_RENDERED_ZONE_BURNED_CELLS = 600;
     const FIRE_RENDER_MODES = {
         BLOB: "blob",
         GRID: "grid"
@@ -450,41 +438,6 @@
                 heat: Number(cell.heat ?? cell.Heat ?? cell.h ?? 0)
             };
         });
-    }
-    function cellRenderScore(cell) {
-        return deterministicNoise(cell.x, cell.y, 97);
-    }
-    function appendRenderableCells(selected, candidates, budget) {
-        if (budget <= 0 || !candidates.length)
-            return;
-        if (candidates.length <= budget) {
-            selected.push(...candidates);
-            return;
-        }
-        selected.push(...candidates
-            .slice()
-            .sort((left, right) => cellRenderScore(left) - cellRenderScore(right))
-            .slice(0, budget));
-    }
-    function selectRenderableCells(cells) {
-        if (!Array.isArray(cells) || cells.length <= MAX_RENDERED_FIRE_CELLS)
-            return cells;
-        const selected = [];
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.ACTIVE), MAX_RENDERED_FIRE_CELLS);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.EMBERS), MAX_RENDERED_FIRE_CELLS - selected.length);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.HEAT), MAX_RENDERED_FIRE_CELLS - selected.length);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.BURNED), Math.min(MAX_RENDERED_BURNED_CELLS, MAX_RENDERED_FIRE_CELLS - selected.length));
-        return selected;
-    }
-    function selectZoneRenderCells(cells) {
-        if (!Array.isArray(cells) || cells.length <= MAX_RENDERED_ZONE_CELLS)
-            return cells;
-        const selected = [];
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.ACTIVE), MAX_RENDERED_ZONE_CELLS);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.EMBERS), MAX_RENDERED_ZONE_CELLS - selected.length);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.HEAT), MAX_RENDERED_ZONE_CELLS - selected.length);
-        appendRenderableCells(selected, cells.filter(cell => cell.state === STATE.BURNED), Math.min(MAX_RENDERED_ZONE_BURNED_CELLS, MAX_RENDERED_ZONE_CELLS - selected.length));
-        return selected;
     }
     function fourNeighbors(coordinate, byCoordinate) {
         const neighbors = [
@@ -587,48 +540,49 @@
         }
         return merged;
     }
+    function burnScarRunFeatureId(run) {
+        return `burn-${run.y}-${run.x1}-${run.x2}-${run.fuel}`;
+    }
+    function buildBurnScarRunFeature(run, center, cellKm = FIRE_GRID.cellKm) {
+        const y = Number(run.y);
+        const x1 = Number(run.x1);
+        const x2 = Number(run.x2);
+        const fuel = String(run.fuel ?? "unknown");
+        if (!Number.isFinite(y) || !Number.isFinite(x1) || !Number.isFinite(x2) || !center)
+            return null;
+        const runCells = [
+            { x: x1, y, xKm: x1 * cellKm, yKm: y * cellKm },
+            { x: x2, y, xKm: x2 * cellKm, yKm: y * cellKm }
+        ];
+        return {
+            type: "Feature",
+            properties: {
+                id: burnScarRunFeatureId({ y, x1, x2, fuel }),
+                state: STATE.BURNED,
+                fuel,
+                intensity: 0,
+                cellCount: Math.max(0, x2 - x1 + 1)
+            },
+            geometry: {
+                type: "Polygon",
+                coordinates: [buildRunRing(center, runCells, cellKm)]
+            }
+        };
+    }
+    function buildBurnScarRunFeatures(runs, center, cellKm = FIRE_GRID.cellKm) {
+        if (!Array.isArray(runs) || !runs.length || !center)
+            return [];
+        return runs
+            .map(run => buildBurnScarRunFeature(run, center, cellKm))
+            .filter(Boolean);
+    }
     function buildBurnScarFeatureCollection(patch, center) {
-        const features = [];
-        if (!patch?.runs?.length || !center)
-            return { type: "FeatureCollection", features };
-        const cellKm = Number(patch.cellKm) || FIRE_GRID.cellKm;
-        const runsByFuel = new Map();
-        for (const run of patch.runs) {
-            const y = Number(run.y);
-            const x1 = Number(run.x1);
-            const x2 = Number(run.x2);
-            const fuel = String(run.fuel ?? "unknown");
-            if (!Number.isFinite(y) || !Number.isFinite(x1) || !Number.isFinite(x2))
-                continue;
-            if (!runsByFuel.has(fuel))
-                runsByFuel.set(fuel, []);
-            runsByFuel.get(fuel).push({ y, x1, x2, fuel });
-        }
-        for (const [fuel, runs] of runsByFuel) {
-            const polygons = runs.map(run => {
-                const runCells = [
-                    { x: run.x1, y: run.y, xKm: run.x1 * cellKm, yKm: run.y * cellKm },
-                    { x: run.x2, y: run.y, xKm: run.x2 * cellKm, yKm: run.y * cellKm }
-                ];
-                return [buildRunRing(center, runCells, cellKm)];
-            });
-            const cellCount = runs.reduce((sum, run) => sum + Math.max(0, run.x2 - run.x1 + 1), 0);
-            features.push({
-                type: "Feature",
-                properties: {
-                    id: `burn-${fuel}`,
-                    state: STATE.BURNED,
-                    fuel,
-                    intensity: 0,
-                    cellCount
-                },
-                geometry: {
-                    type: polygons.length === 1 ? "Polygon" : "MultiPolygon",
-                    coordinates: polygons.length === 1 ? polygons[0] : polygons
-                }
-            });
-        }
-        return { type: "FeatureCollection", features };
+        const cellKm = Number(patch?.cellKm) || FIRE_GRID.cellKm;
+        const runs = patch?.runs?.length ? mergeBurnScarRunList(patch.runs) : [];
+        return {
+            type: "FeatureCollection",
+            features: buildBurnScarRunFeatures(runs, center, cellKm)
+        };
     }
     function buildGridFeatureCollection(cells, center, cellKm = FIRE_GRID.cellKm) {
         const groups = {
@@ -870,16 +824,13 @@
     function buildFireSimulationFrameFromState(state, options = {}) {
         const center = normalizeCenter(state.center);
         const renderMode = normalizeRenderMode(options.renderMode);
-        const renderCells = selectRenderableCells(state.cells);
-        const zoneCells = renderMode === FIRE_RENDER_MODES.GRID
-            ? selectZoneRenderCells(renderCells)
-            : renderCells;
+        const renderCells = state.cells;
         const windSpeed = Math.round(WIND_MODEL.speedKmh + Math.sin(state.step * 0.18) * 5);
         return {
             step: state.step,
             center,
             cells: renderCells,
-            zones: buildFireFeatureCollection(zoneCells, center, renderMode),
+            zones: buildFireFeatureCollection(renderCells, center, renderMode),
             emitters: buildFireEmitters(renderCells, center),
             stats: summarizeFireStats(state.cells, state.burnScar),
             burnScar: buildBurnScarPatch(state.burnScar),
@@ -1050,10 +1001,7 @@
         if (cells?.length) {
             const normalized = normalizeFrameCells(cells, frame.center, frame.cellKm);
             if (normalized.length) {
-                const zoneCells = mode === FIRE_RENDER_MODES.GRID
-                    ? selectZoneRenderCells(normalized)
-                    : normalized;
-                return buildFireFeatureCollection(zoneCells, frame.center, mode, { cellKm: frame.cellKm ?? FIRE_GRID.cellKm });
+                return buildFireFeatureCollection(normalized, frame.center, mode, { cellKm: frame.cellKm ?? FIRE_GRID.cellKm });
             }
         }
         if (mode === FIRE_RENDER_MODES.GRID && frame.incidentSeed != null && frame.zones?.features?.length) {
@@ -1075,6 +1023,9 @@
         IGNITION_SOURCE_ID,
         buildFireFeatureCollection,
         buildBurnScarFeatureCollection,
+        buildBurnScarRunFeature,
+        buildBurnScarRunFeatures,
+        burnScarRunFeatureId,
         mergeBurnScarRunList,
         buildFireLayerDefinitions,
         buildFireLegendItems,
@@ -1090,13 +1041,10 @@
         markBurnScarPublished,
         getFireRenderModeLabel,
         localKmToLngLat,
-        MAX_RENDERED_ZONE_CELLS,
-        MAX_RENDERED_ZONE_BURNED_CELLS,
         normalizeFrameCells,
         normalizeRenderMode,
         resetFireSimulationState,
-        resolveFireZones,
-        selectZoneRenderCells
+        resolveFireZones
     };
     global.FireLogisticsFire = api;
     if (typeof module !== "undefined" && module.exports)

@@ -291,6 +291,7 @@
     state.burnScarEverLoaded = false;
     state.burnScarFeatures = [];
     state.burnScarRuns = [];
+    state.burnScarFeatureIds = new Set();
     state.lastBurnScarRevision = -1;
   }
 
@@ -329,7 +330,6 @@
   function applyFireZonesToSource(fireSource, state, zones) {
     const features = zones.features || [];
     const zonesHash = hashZones(zones);
-    const useFullRewrite = features.length > 48;
 
     if (state && state.lastZonesHash === zonesHash) return false;
 
@@ -352,17 +352,17 @@
       fireSource.setData(zones);
       if (state) {
         state.fireZonesEverLoaded = true;
-        state.lastZoneFeatures = useFullRewrite ? features : cloneFireZoneFeatures(features);
+        state.lastZoneFeatures = cloneFireZoneFeatures(features);
         state.lastZonesHash = zonesHash;
         if (state.counters) state.counters.setData += 1;
       }
       return true;
     }
 
-    if (typeof fireSource.updateData !== "function" || useFullRewrite) {
+    if (typeof fireSource.updateData !== "function") {
       fireSource.setData(zones);
       if (state) {
-        state.lastZoneFeatures = useFullRewrite ? features : cloneFireZoneFeatures(features);
+        state.lastZoneFeatures = cloneFireZoneFeatures(features);
         state.lastZonesHash = zonesHash;
         if (state.counters) state.counters.setData += 1;
       }
@@ -384,33 +384,85 @@
   function applyBurnScarToSource(burnScarSource, state, frame) {
     if (!burnScarSource?.setData || !frame?.burnScar) return false;
     const patch = frame.burnScar;
+    const cellKm = patch.cellKm ?? Fire.FIRE_GRID.cellKm;
+    const patchRuns = Array.isArray(patch.runs) ? patch.runs : [];
+
     if (patch.reset) {
-      if (state) state.burnScarRuns = [];
+      if (state) {
+        state.burnScarRuns = [];
+        state.burnScarFeatureIds = new Set();
+      }
     }
     if (state && !Array.isArray(state.burnScarRuns)) state.burnScarRuns = [];
-    if (state && Array.isArray(patch.runs) && patch.runs.length) {
-      state.burnScarRuns.push(...patch.runs);
+    if (state && !state.burnScarFeatureIds) state.burnScarFeatureIds = new Set();
+    if (state && patchRuns.length) {
+      state.burnScarRuns = Fire.mergeBurnScarRunList([...state.burnScarRuns, ...patchRuns]);
     }
-    const mergedRuns = Fire.mergeBurnScarRunList(state?.burnScarRuns ?? patch.runs ?? []);
-    if (state) state.burnScarRuns = mergedRuns;
 
     const revision = Number(patch.revision ?? frame.revision ?? frame.step ?? 0);
     if (!patch.reset && state?.burnScarEverLoaded && revision <= state.lastBurnScarRevision) {
       return false;
     }
 
-    const featureCollection = Fire.buildBurnScarFeatureCollection({
-      reset: patch.reset,
-      revision,
-      cellKm: patch.cellKm ?? Fire.FIRE_GRID.cellKm,
-      runs: mergedRuns
-    }, frame.center);
-    const features = featureCollection.features || [];
-    if (!features.length && !patch.reset) return false;
+    if (patch.reset) {
+      const features = Fire.buildBurnScarRunFeatures(
+        Fire.mergeBurnScarRunList(patchRuns),
+        frame.center,
+        cellKm
+      );
+      burnScarSource.setData({ type: "FeatureCollection", features });
+      if (state) {
+        state.burnScarEverLoaded = true;
+        state.burnScarFeatures = features.slice();
+        state.burnScarFeatureIds = new Set(features.map(feature => feature.properties.id));
+        state.lastBurnScarRevision = revision;
+        if (state.counters) state.counters.burnScarSetData += 1;
+      }
+      return true;
+    }
 
-    burnScarSource.setData(featureCollection);
+    if (!state?.burnScarEverLoaded) {
+      const features = Fire.buildBurnScarRunFeatures(
+        Fire.mergeBurnScarRunList(patchRuns),
+        frame.center,
+        cellKm
+      );
+      if (!features.length) return false;
+      burnScarSource.setData({ type: "FeatureCollection", features });
+      if (state) {
+        state.burnScarEverLoaded = true;
+        state.burnScarFeatures = features.slice();
+        state.burnScarFeatureIds = new Set(features.map(feature => feature.properties.id));
+        state.lastBurnScarRevision = revision;
+        if (state.counters) state.counters.burnScarSetData += 1;
+      }
+      return true;
+    }
+
+    const newFeatures = [];
+    for (const run of patchRuns) {
+      const normalized = Fire.mergeBurnScarRunList([run])[0];
+      if (!normalized) continue;
+      const featureId = Fire.burnScarRunFeatureId(normalized);
+      if (state.burnScarFeatureIds.has(featureId)) continue;
+      const feature = Fire.buildBurnScarRunFeature(normalized, frame.center, cellKm);
+      if (!feature) continue;
+      newFeatures.push(feature);
+      state.burnScarFeatureIds.add(featureId);
+    }
+    if (!newFeatures.length) return false;
+
+    if (typeof burnScarSource.updateData === "function") {
+      burnScarSource.updateData({ add: newFeatures });
+      state.burnScarFeatures.push(...newFeatures);
+      state.lastBurnScarRevision = revision;
+      if (state.counters) state.counters.burnScarUpdateData += 1;
+      return true;
+    }
+
+    const features = Fire.buildBurnScarRunFeatures(state.burnScarRuns, frame.center, cellKm);
+    burnScarSource.setData({ type: "FeatureCollection", features });
     if (state) {
-      state.burnScarEverLoaded = true;
       state.burnScarFeatures = features.slice();
       state.lastBurnScarRevision = revision;
       if (state.counters) state.counters.burnScarSetData += 1;
@@ -483,6 +535,7 @@
       burnScarEverLoaded: false,
       burnScarFeatures: [],
       burnScarRuns: [],
+      burnScarFeatureIds: new Set(),
       lastBurnScarRevision: -1,
       fireZonesEverLoaded: false,
       lastIgnitionKey: null,
@@ -1317,7 +1370,6 @@
       shouldClearFireEffects,
       resolveFireZones: Fire.resolveFireZones,
       FIRE_RENDER_MODES: Fire.FIRE_RENDER_MODES,
-      MAX_RENDERED_ZONE_CELLS: Fire.MAX_RENDERED_ZONE_CELLS,
       buildFranceWorldStyle,
       buildFuelLayerDefinitions,
       buildFuelLegendItems,

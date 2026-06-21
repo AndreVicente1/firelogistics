@@ -55,9 +55,9 @@ window.FireLogistics.receiveFireFrame(frame)
 
 `revision` is monotonic within an incident and `reason` explains why the frame was published (`"initial"`, `"tick"`, `"command"`, `"reset"`, `"ignition"`, or `"fuel_sample"`). The browser must apply only the newest Core frame for an incident and coalesce multiple received frames so MapLibre is updated at most once per browser animation frame.
 
-`zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells. For large incidents, `zones` may be built from a smaller deterministic render sample than `cells`; clients that need a fluid surface should rebuild it from `cells`.
+`zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells. Clients that need a fluid surface should rebuild live zones from `cells`.
 
-`cells` is an optional compact, render-budgeted array of fire cells (`{ "x", "y", "fuel", "state", "intensity", "heat" }`) used by the browser to rebuild zones in blob mode without re-simulating locally. C# must publish it on every Core frame, but it may be deterministically sampled or capped for large incidents. Gameplay/state counters must come from `stats`, not from assuming `cells` is exhaustive.
+`cells` is a compact array of all visible fire cells (`{ "x", "y", "fuel", "state", "intensity", "heat" }`) used by the browser to rebuild zones in blob mode without re-simulating locally. C# must publish every visible live cell on every Core frame without render sampling or caps. Gameplay/state counters must come from `stats`, not from assuming `cells` is exhaustive.
 
 `burnScar` is an optional compact patch for the complete burned trace. It has `{ "reset": boolean, "revision": number, "cellKm": number, "runs": [{ "y": number, "x1": number, "x2": number, "fuel": string }] }`. When `reset` is true, the browser replaces the burn-scar source with exactly those runs. When `reset` is false, the browser appends the runs incrementally. `zones` and `cells` represent the live front and must not be treated as the complete burned-history source.
 
@@ -66,7 +66,7 @@ The browser may switch fire rendering between:
 - `blob`: smooth tactical envelope built client-side from `cells`
 - `grid`: rectangular cell runs; Core frames may reuse authoritative `zones` directly
 
-Each live-zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface` for blob mode, or `{state}-{fuel}` for grid mode) so the browser can diff updates. Burn-scar features use ids derived from their patch revision and run coordinates.
+Each live-zone feature must expose a stable `properties.id` (`heat-surface`, `active-surface`, `embers-surface` for blob mode, or `{state}-{fuel}` for grid mode) so the browser can diff updates. Burn-scar features use stable ids `burn-{y}-{x1}-{x2}-{fuel}` with one feature per horizontal run.
 
 ## Fire map rendering
 

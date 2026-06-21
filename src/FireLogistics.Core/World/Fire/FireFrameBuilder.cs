@@ -2,11 +2,6 @@ namespace FireLogistics.Core.World.Fire;
 
 public static class FireFrameBuilder
 {
-    private const int MaxRenderedFireCells = 12_000;
-    private const int MaxRenderedBurnedCells = 3_000;
-    private const int MaxRenderedZoneCells = 2_500;
-    private const int MaxRenderedZoneBurnedCells = 600;
-
     private static readonly FireCellState[] RenderStates =
     [
         FireCellState.Heat,
@@ -16,13 +11,7 @@ public static class FireFrameBuilder
 
     public static FireSimulationFrame Build(FireSimulationState state, string? status = null, int revision = 1, string reason = "initial")
     {
-        IReadOnlyList<FireCell> renderCells = SelectRenderableCells(
-            state.Cells.Values,
-            MaxRenderedFireCells,
-            MaxRenderedBurnedCells);
-        IReadOnlyList<FireCell> zoneCells = renderCells.Count > MaxRenderedZoneCells
-            ? SelectRenderableCells(renderCells, MaxRenderedZoneCells, MaxRenderedZoneBurnedCells)
-            : renderCells;
+        IReadOnlyList<FireCell> renderCells = VisibleCells(state.Cells.Values);
 
         return new FireSimulationFrame(
             state.Step,
@@ -30,7 +19,7 @@ public static class FireFrameBuilder
             reason,
             [state.Environment.Longitude, state.Environment.Latitude],
             state.Environment.IncidentSeed,
-            BuildFeatureCollection(state, zoneCells),
+            BuildFeatureCollection(state, renderCells),
             BuildCells(renderCells),
             BuildEmitters(state),
             BuildStats(state),
@@ -42,42 +31,10 @@ public static class FireFrameBuilder
             state.BurnScar.CreatePatch(state.Environment.CellKm));
     }
 
-    private static IReadOnlyList<FireCell> SelectRenderableCells(IEnumerable<FireCell> sourceCells, int maxCells, int maxBurnedCells)
-    {
-        List<FireCell> visible = sourceCells
+    private static IReadOnlyList<FireCell> VisibleCells(IEnumerable<FireCell> sourceCells)
+        => sourceCells
             .Where(cell => cell.State is FireCellState.Heat or FireCellState.Active or FireCellState.Embers or FireCellState.Burned)
             .ToList();
-        if (visible.Count <= maxCells)
-        {
-            return visible;
-        }
-
-        var selected = new List<FireCell>(maxCells);
-        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Active), maxCells);
-        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Embers), maxCells - selected.Count);
-        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Heat), maxCells - selected.Count);
-        AddRenderableCells(selected, visible.Where(cell => cell.State == FireCellState.Burned), Math.Min(maxBurnedCells, maxCells - selected.Count));
-        return selected;
-    }
-
-    private static void AddRenderableCells(List<FireCell> selected, IEnumerable<FireCell> candidates, int budget)
-    {
-        if (budget <= 0)
-        {
-            return;
-        }
-
-        List<FireCell> cells = candidates.ToList();
-        if (cells.Count <= budget)
-        {
-            selected.AddRange(cells);
-            return;
-        }
-
-        selected.AddRange(cells
-            .OrderBy(cell => StableCellHash(cell.Coordinate))
-            .Take(budget));
-    }
 
     private static IReadOnlyList<WireFireCell> BuildCells(IReadOnlyList<FireCell> cells)
     {
@@ -307,19 +264,6 @@ public static class FireFrameBuilder
                     yield return new FireGridCoordinate(coordinate.X + x, coordinate.Y + y);
                 }
             }
-        }
-    }
-
-    private static uint StableCellHash(FireGridCoordinate coordinate)
-    {
-        unchecked
-        {
-            uint hash = 2166136261;
-            hash = (hash ^ (uint)coordinate.X) * 16777619;
-            hash = (hash ^ (uint)(coordinate.X >> 16)) * 16777619;
-            hash = (hash ^ (uint)coordinate.Y) * 16777619;
-            hash = (hash ^ (uint)(coordinate.Y >> 16)) * 16777619;
-            return hash;
         }
     }
 

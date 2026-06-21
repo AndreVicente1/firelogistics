@@ -284,8 +284,8 @@ test("burn scar deltas update a separate source without rewriting fire zones", (
 
   assert.equal(writes.fireSetData, 1);
   assert.equal(writes.fireUpdateData, 0);
-  assert.equal(writes.scarSetData, 2);
-  assert.equal(writes.scarUpdateData, 0);
+  assert.equal(writes.scarSetData, 1);
+  assert.equal(writes.scarUpdateData, 1);
 });
 
 test("pending Core fire frames merge burn scar deltas before render", () => {
@@ -479,11 +479,10 @@ test("paused Core frames with unchanged geometry do not rewrite fire zones", () 
   assert.equal(ignitionSetData, 1);
 });
 
-test("grid rendering keeps grid geometry when the cell budget is too high", () => {
+test("grid rendering keeps grid geometry for large incidents", () => {
   const {
     FIRE_RENDER_MODES,
     FIRE_SOURCE_ID,
-    MAX_RENDERED_ZONE_CELLS,
     applyFireFrameToSources,
     buildFireSimulationFrame,
     createFireRenderState
@@ -511,7 +510,7 @@ test("grid rendering keeps grid geometry when the cell budget is too high", () =
 
   applyFireFrameToSources(map, frame, frame.center, FIRE_RENDER_MODES.GRID);
 
-  assert.ok(frame.cells.length > MAX_RENDERED_ZONE_CELLS);
+  assert.ok(frame.cells.length > 0);
   assert.ok(renderedZones.features.length > 0);
   assert.ok(renderedZones.features.every(feature => !feature.properties.id.endsWith("-surface")));
 });
@@ -771,7 +770,7 @@ test("wildfire keeps a wind-driven front alive over a longer incident", () => {
   assert.ok(frame.zones.features.some(feature => feature.properties.state === "active"));
 });
 
-test("wildfire frames cap rendered cells without capping simulation stats", () => {
+test("wildfire frames publish all visible cells without capping simulation stats", () => {
   const { buildFireSimulationFrame } = require("../../assets/web/js/app.js");
 
   const frame = buildFireSimulationFrame(140);
@@ -780,8 +779,8 @@ test("wildfire frames cap rendered cells without capping simulation stats", () =
 
   assert.ok(frame.stats.activeCells > 0);
   assert.ok(frame.stats.burnedHectares > renderedCellCount);
-  assert.ok(renderedCellCount <= 12000);
-  assert.ok(renderedFeatureCellCount <= 12000);
+  assert.ok(renderedCellCount > 0);
+  assert.ok(renderedFeatureCellCount > 0);
   assert.ok(frame.zones.features.some(feature => feature.properties.state === "active"));
 });
 

@@ -165,17 +165,17 @@ public sealed class FireSimulationTests
     }
 
     [Fact]
-    public void FireFrameCapsRenderedCellsForLargeIncidents()
+    public void FireFramePublishesAllVisibleCellsForLargeIncidents()
     {
         FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
         FireSimulator.Advance(state, 220);
 
         FireSimulationFrame frame = FireFrameBuilder.Build(state);
 
-        Assert.InRange(frame.Cells.Count, 1, 12_000);
-        Assert.InRange(frame.Zones.Features.Sum(feature => feature.Properties.CellCount), 1, 2_500);
+        Assert.True(frame.Cells.Count > 0);
         Assert.Contains(frame.Cells, cell => cell.State == "active");
         Assert.True(frame.Stats.ActiveCells > 0);
+        Assert.True(frame.Zones.Features.Sum(feature => feature.Properties.CellCount) > 0);
     }
 
     [Fact]
