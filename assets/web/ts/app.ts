@@ -724,11 +724,27 @@
         sendToGodot("fire_ignition_selected", { center });
       },
       requestFuelSample(request) {
-        const sample = createRenderedFuelSample(map, center, request);
-        if (sample) {
-          renderState.counters.samplesSent += 1;
-          sendToGodot("fire_fuel_overrides_ready", sample);
+        const deliverSample = () => {
+          const sample = createRenderedFuelSample(map, center, request);
+          if (sample) {
+            renderState.counters.samplesSent += 1;
+            sendToGodot("fire_fuel_overrides_ready", sample);
+            return true;
+          }
+          return false;
+        };
+
+        if (deliverSample()) {
+          return;
         }
+
+        sendToGodot("fire_fuel_sample_failed", request ?? null);
+        map.once("idle", () => {
+          if (!hasIgnition || deliverSample()) {
+            return;
+          }
+          sendToGodot("fire_fuel_sample_failed", request ?? null);
+        });
       }
     };
 

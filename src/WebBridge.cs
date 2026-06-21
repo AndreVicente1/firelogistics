@@ -62,6 +62,11 @@ public partial class WebBridge : Node
             }
             PushFuelSampleRequestToWeb();
         }
+        else if (ipcMessage.Action == "fire_fuel_sample_failed")
+        {
+            _fireRuntime.AbortFuelSampleRequest();
+            PushFuelSampleRequestToWeb();
+        }
         else if (ipcMessage.Action == "quit_game")
         {
             GetTree().Quit();

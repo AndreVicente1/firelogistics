@@ -773,18 +773,21 @@
     const empty = { type: "FeatureCollection", features: [] };
     if (!frame) return empty;
 
+    const cells = Array.isArray(frame.cells) && frame.cells.length
+      ? frame.cells
+      : null;
+    if (cells?.length) {
+      const normalized = normalizeFrameCells(cells, frame.center, frame.cellKm);
+      if (normalized.length) {
+        return buildFireFeatureCollection(normalized, frame.center, mode, { cellKm: frame.cellKm ?? FIRE_GRID.cellKm });
+      }
+    }
+
     if (mode === FIRE_RENDER_MODES.GRID && frame.incidentSeed != null && frame.zones?.features?.length) {
       return frame.zones;
     }
 
-    const cells = Array.isArray(frame.cells) && frame.cells.length
-      ? frame.cells
-      : null;
-    if (!cells) return frame.zones || empty;
-
-    const normalized = normalizeFrameCells(cells, frame.center, frame.cellKm);
-    if (!normalized.length) return frame.zones || empty;
-    return buildFireFeatureCollection(normalized, frame.center, mode, { cellKm: frame.cellKm ?? FIRE_GRID.cellKm });
+    return frame.zones || empty;
   }
 
   function getFireRenderModeLabel(mode) {

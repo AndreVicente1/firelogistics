@@ -402,9 +402,10 @@ test("resolveFireZones can rebuild blob zones from Core wire cells", () => {
   const blobZones = resolveFireZones(frame, FIRE_RENDER_MODES.BLOB);
   const gridZones = resolveFireZones(frame, FIRE_RENDER_MODES.GRID);
 
-  assert.equal(gridZones, frame.zones);
   assert.ok(blobZones.features.length > 0);
+  assert.ok(gridZones.features.length > 0);
   assert.ok(blobZones.features.every(feature => feature.geometry.coordinates[0].length > 12));
+  assert.ok(gridZones.features.some(feature => feature.geometry.coordinates[0].length <= 6));
 });
 
 test("wildfire exposes nearby buildings without making water or mineral burn", () => {

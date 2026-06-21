@@ -17,6 +17,7 @@ Supported JS -> C# actions:
 - `fire_ignition_selected`: reports a selected ignition center as `{ "center": [longitude, latitude] }`.
 - `fire_command`: controls the Core fire runtime with `{ "command": "pause" | "resume" | "reset" | "clear" }`.
 - `fire_fuel_overrides_ready`: reports optional rendered-map fuels as `{ "originX": number, "originY": number, "width": number, "height": number, "cellKm": number, "fuels": string[] }`. This message may be sent repeatedly; C# merges the samples into the current incident instead of resetting it.
+- `fire_fuel_sample_failed`: reports that the browser could not sample fuels for the requested window. C# clears the pending sample request and may ask again.
 
 C# publishes the authoritative fire simulation frame by evaluating:
 

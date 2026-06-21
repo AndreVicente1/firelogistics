@@ -12,6 +12,9 @@ public sealed class FireRuntimeController
     private const int MaxSampleWidth = 512;
     private const int MaxSampleHeight = 512;
     private const int SampleMargin = 32;
+    private const int SampleFetchMargin = 96;
+    private const int SampleLookaheadRadius = 4;
+    private readonly HashSet<FireGridCoordinate> _sampledCoordinates = [];
     private FireSimulationState _state = FireSimulator.Create(DefaultLongitude, DefaultLatitude, igniteOnStart: false);
     private int? _sampleOriginX;
     private int? _sampleOriginY;
@@ -139,6 +142,7 @@ public sealed class FireRuntimeController
         _sampleWidth = nextWidth;
         _sampleHeight = nextHeight;
         _sampleRequestPending = false;
+        MarkSampleRegion(originX, originY, width, height);
         _state.ApplyFuelOverrides(fuelOverrides);
         Running = Running && _state.IsAlive;
         if (before == BuildVisibleSignature())
@@ -168,6 +172,11 @@ public sealed class FireRuntimeController
         return request;
     }
 
+    public void AbortFuelSampleRequest()
+    {
+        _sampleRequestPending = false;
+    }
+
     private bool NeedsFuelSample()
     {
         if (!_hasIgnition || !_state.IsAlive)
@@ -176,6 +185,14 @@ public sealed class FireRuntimeController
         }
 
         if (!_sampleOriginX.HasValue || !_sampleOriginY.HasValue || !_sampleWidth.HasValue || !_sampleHeight.HasValue)
+        {
+            return true;
+        }
+
+        List<FireCell> frontCells = _state.Cells.Values
+            .Where(cell => cell.State is FireCellState.Active or FireCellState.Heat or FireCellState.Embers)
+            .ToList();
+        if (FrontNeedsUnsampledFuel(frontCells))
         {
             return true;
         }
@@ -207,10 +224,10 @@ public sealed class FireRuntimeController
                 _state.Environment.CellKm);
         }
 
-        int minX = frontCells.Min(cell => cell.Coordinate.X) - SampleMargin;
-        int maxX = frontCells.Max(cell => cell.Coordinate.X) + SampleMargin;
-        int minY = frontCells.Min(cell => cell.Coordinate.Y) - SampleMargin;
-        int maxY = frontCells.Max(cell => cell.Coordinate.Y) + SampleMargin;
+        int minX = frontCells.Min(cell => cell.Coordinate.X) - SampleFetchMargin;
+        int maxX = frontCells.Max(cell => cell.Coordinate.X) + SampleFetchMargin;
+        int minY = frontCells.Min(cell => cell.Coordinate.Y) - SampleFetchMargin;
+        int maxY = frontCells.Max(cell => cell.Coordinate.Y) + SampleFetchMargin;
         int width = Math.Clamp(maxX - minX + 1, MinSampleWidth, MaxSampleWidth);
         int height = Math.Clamp(maxY - minY + 1, MinSampleHeight, MaxSampleHeight);
         int centerX = (minX + maxX) / 2;
@@ -230,6 +247,48 @@ public sealed class FireRuntimeController
         _sampleWidth = null;
         _sampleHeight = null;
         _sampleRequestPending = false;
+        _sampledCoordinates.Clear();
+    }
+
+    private void MarkSampleRegion(int originX, int originY, int width, int height)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                _sampledCoordinates.Add(new FireGridCoordinate(originX + x, originY + y));
+            }
+        }
+    }
+
+    private bool FrontNeedsUnsampledFuel(IReadOnlyList<FireCell> frontCells)
+    {
+        if (frontCells.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (FireCell cell in frontCells)
+        {
+            for (int dy = -SampleLookaheadRadius; dy <= SampleLookaheadRadius; dy++)
+            {
+                for (int dx = -SampleLookaheadRadius; dx <= SampleLookaheadRadius; dx++)
+                {
+                    if (dx == 0 && dy == 0)
+                    {
+                        continue;
+                    }
+
+                    var coordinate = new FireGridCoordinate(cell.Coordinate.X + dx, cell.Coordinate.Y + dy);
+                    if (!_sampledCoordinates.Contains(coordinate))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     private void Publish(string reason)
