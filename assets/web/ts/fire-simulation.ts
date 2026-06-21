@@ -568,6 +568,7 @@
     buildFireSimulationFrame,
     buildFireSimulationFrameFromState,
     buildIgnitionFeatureCollection,
+    classifyRenderedFuel,
     createFireSimulationState,
     createRenderedFuelOverrides,
     advanceFireSimulationState,

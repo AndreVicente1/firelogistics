@@ -26,6 +26,7 @@ public partial class WebBridge : Node
         GD.Print("WebView page chargee: " + url);
         PushRuntimeMetricsToWeb();
         PushFireFrameToWeb();
+        PushFuelSampleRequestToWeb();
     }
 
     public void OnWebViewMessage(string message)
@@ -44,17 +45,22 @@ public partial class WebBridge : Node
         {
             HandleFireCommand(ipcMessage.Payload);
             PushFireFrameToWeb();
+            PushFuelSampleRequestToWeb();
         }
         else if (ipcMessage.Action == "fire_ignition_selected")
         {
             GD.Print("[Web ignition] " + message);
             HandleFireIgnitionSelected(ipcMessage.Payload);
             PushFireFrameToWeb();
+            PushFuelSampleRequestToWeb();
         }
         else if (ipcMessage.Action == "fire_fuel_overrides_ready")
         {
-            HandleFuelOverrides(ipcMessage.Payload);
-            PushFireFrameToWeb();
+            if (HandleFuelOverrides(ipcMessage.Payload))
+            {
+                PushFireFrameToWeb();
+            }
+            PushFuelSampleRequestToWeb();
         }
         else if (ipcMessage.Action == "quit_game")
         {
@@ -67,6 +73,7 @@ public partial class WebBridge : Node
         if (_fireRuntime.Advance(delta))
         {
             PushFireFrameToWeb();
+            PushFuelSampleRequestToWeb();
         }
     }
 
@@ -92,6 +99,23 @@ public partial class WebBridge : Node
 
         string payload = JsonSerializer.Serialize(_fireRuntime.CurrentFrame, JsonOptions);
         _webView.Call("eval", $"if(window.FireLogistics?.receiveFireFrame) window.FireLogistics.receiveFireFrame({payload});");
+    }
+
+    public void PushFuelSampleRequestToWeb()
+    {
+        if (_webView == null)
+        {
+            return;
+        }
+
+        FireFuelSampleRequest? request = _fireRuntime.TakeFuelSampleRequest();
+        if (request == null)
+        {
+            return;
+        }
+
+        string payload = JsonSerializer.Serialize(request, JsonOptions);
+        _webView.Call("eval", $"if(window.FireLogistics?.requestFuelSample) window.FireLogistics.requestFuelSample({payload});");
     }
 
     private void HandleFireCommand(JsonElement? payload)
@@ -129,25 +153,25 @@ public partial class WebBridge : Node
         }
     }
 
-    private void HandleFuelOverrides(JsonElement? payload)
+    private bool HandleFuelOverrides(JsonElement? payload)
     {
         if (payload is not { ValueKind: JsonValueKind.Object } element
             || !element.TryGetProperty("fuels", out JsonElement fuels)
             || fuels.ValueKind != JsonValueKind.Array)
         {
-            return;
+            return false;
         }
 
+        int originX = TryReadInt(element, "originX") ?? -(TryReadInt(element, "width") ?? 0) / 2;
+        int originY = TryReadInt(element, "originY") ?? -(TryReadInt(element, "height") ?? 0) / 2;
         int width = TryReadInt(element, "width") ?? 0;
         int height = TryReadInt(element, "height") ?? 0;
         if (width <= 0 || height <= 0 || fuels.GetArrayLength() < width * height)
         {
-            return;
+            return false;
         }
 
         var overrides = new Dictionary<FireGridCoordinate, FuelType>();
-        int originX = width / 2;
-        int originY = height / 2;
         int index = 0;
         foreach (JsonElement fuelElement in fuels.EnumerateArray())
         {
@@ -157,11 +181,11 @@ public partial class WebBridge : Node
             if (fuelElement.ValueKind == JsonValueKind.String
                 && TryParseFuel(fuelElement.GetString(), out FuelType fuel))
             {
-                overrides[new FireGridCoordinate(x - originX, y - originY)] = fuel;
+                overrides[new FireGridCoordinate(originX + x, originY + y)] = fuel;
             }
         }
 
-        _fireRuntime.SetFuelOverrides(overrides);
+        return _fireRuntime.MergeFuelOverrides(originX, originY, width, height, overrides);
     }
 
     private static string? TryReadString(JsonElement? payload, string propertyName)

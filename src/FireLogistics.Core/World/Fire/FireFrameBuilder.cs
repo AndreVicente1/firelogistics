@@ -10,10 +10,12 @@ public static class FireFrameBuilder
         FireCellState.Active
     ];
 
-    public static FireSimulationFrame Build(FireSimulationState state)
+    public static FireSimulationFrame Build(FireSimulationState state, string? status = null, int revision = 1, string reason = "initial")
     {
         return new FireSimulationFrame(
             state.Step,
+            revision,
+            reason,
             [state.Environment.Longitude, state.Environment.Latitude],
             state.Environment.IncidentSeed,
             BuildFeatureCollection(state),
@@ -23,7 +25,7 @@ public static class FireFrameBuilder
                 state.Environment.WindDirection,
                 72,
                 (int)Math.Round(state.Environment.BaseWindSpeedKmh + Math.Sin(state.Step * 0.18) * 5)),
-            state.IsAlive ? "running" : "extinguished");
+            status ?? (state.IsAlive ? "running" : "extinguished"));
     }
 
     private static FireFeatureCollection BuildFeatureCollection(FireSimulationState state)
@@ -35,122 +37,54 @@ public static class FireFrameBuilder
                 .Where(cell => cell.State == renderState)
                 .ToList();
 
-            foreach (List<FireCell> component in ConnectedComponents(cells))
+            var groupedRuns = ConnectedComponents(cells)
+                .SelectMany(BuildHorizontalRuns)
+                .GroupBy(DominantFuel);
+
+            foreach (IGrouping<FuelType, List<FireCell>> fuelGroup in groupedRuns)
             {
-                IReadOnlyList<double[]> ring = BuildExteriorRing(state.Environment, component);
-                if (ring.Count < 4)
+                List<List<FireCell>> runs = fuelGroup.ToList();
+                if (runs.Count == 0)
                 {
                     continue;
                 }
 
+                List<IReadOnlyList<IReadOnlyList<double[]>>> polygons = runs
+                    .Select(run => (IReadOnlyList<IReadOnlyList<double[]>>)[BuildRunRing(state.Environment, run)])
+                    .ToList();
                 string stateName = ToWireName(renderState);
                 features.Add(new FireFeature(
                     "Feature",
                     new FireFeatureProperties(
-                        $"{stateName}-{features.Count}",
+                        $"{stateName}-{ToWireName(fuelGroup.Key)}",
                         stateName,
-                        ToWireName(DominantFuel(component)),
-                        Math.Round(component.Max(cell => Math.Max(cell.Intensity, cell.Heat)), 3),
-                        component.Count),
-                    new FireGeometry("Polygon", [ring])));
+                        ToWireName(fuelGroup.Key),
+                        Math.Round(runs.SelectMany(run => run).Max(cell => Math.Max(cell.Intensity, cell.Heat)), 3),
+                        runs.Sum(run => run.Count)),
+                    new FireGeometry("MultiPolygon", polygons)));
             }
         }
 
         return new FireFeatureCollection("FeatureCollection", features);
     }
 
-    private static IReadOnlyList<double[]> BuildExteriorRing(FireEnvironment environment, List<FireCell> cells)
+    private static IReadOnlyList<double[]> BuildRunRing(FireEnvironment environment, List<FireCell> cells)
     {
-        HashSet<FireGridCoordinate> component = cells.Select(cell => cell.Coordinate).ToHashSet();
-        var edges = new List<(Vertex Start, Vertex End)>();
-        foreach (FireGridCoordinate c in component)
-        {
-            var north = new FireGridCoordinate(c.X, c.Y + 1);
-            var east = new FireGridCoordinate(c.X + 1, c.Y);
-            var south = new FireGridCoordinate(c.X, c.Y - 1);
-            var west = new FireGridCoordinate(c.X - 1, c.Y);
-
-            if (!component.Contains(north))
-            {
-                edges.Add((new Vertex(c.X, c.Y + 1), new Vertex(c.X + 1, c.Y + 1)));
-            }
-
-            if (!component.Contains(east))
-            {
-                edges.Add((new Vertex(c.X + 1, c.Y + 1), new Vertex(c.X + 1, c.Y)));
-            }
-
-            if (!component.Contains(south))
-            {
-                edges.Add((new Vertex(c.X + 1, c.Y), new Vertex(c.X, c.Y)));
-            }
-
-            if (!component.Contains(west))
-            {
-                edges.Add((new Vertex(c.X, c.Y), new Vertex(c.X, c.Y + 1)));
-            }
-        }
-
-        List<List<Vertex>> loops = TraceLoops(edges);
-        List<Vertex>? exterior = loops
-            .OrderByDescending(loop => Math.Abs(SignedArea(loop)))
-            .FirstOrDefault();
-        if (exterior == null)
-        {
-            return [];
-        }
-
-        var coordinates = exterior.Select(vertex =>
-        {
-            double xKm = (vertex.X - 0.5) * environment.CellKm;
-            double yKm = (vertex.Y - 0.5) * environment.CellKm;
-            return environment.ToLngLat(xKm, yKm);
-        }).ToList();
-
-        if (coordinates.Count > 0 && !SameCoordinate(coordinates[0], coordinates[^1]))
-        {
-            coordinates.Add(coordinates[0]);
-        }
-
-        return coordinates;
+        int minX = cells.Min(cell => cell.Coordinate.X);
+        int maxX = cells.Max(cell => cell.Coordinate.X);
+        int y = cells[0].Coordinate.Y;
+        return
+        [
+            ToLngLat(environment, minX, y),
+            ToLngLat(environment, maxX + 1, y),
+            ToLngLat(environment, maxX + 1, y + 1),
+            ToLngLat(environment, minX, y + 1),
+            ToLngLat(environment, minX, y)
+        ];
     }
 
-    private static List<List<Vertex>> TraceLoops(List<(Vertex Start, Vertex End)> edges)
-    {
-        var outgoing = edges
-            .GroupBy(edge => edge.Start)
-            .ToDictionary(group => group.Key, group => group.Select(edge => edge.End).ToList());
-        var remaining = new HashSet<(Vertex Start, Vertex End)>(edges);
-        var loops = new List<List<Vertex>>();
-
-        while (remaining.Count > 0)
-        {
-            (Vertex start, Vertex end) = remaining.First();
-            remaining.Remove((start, end));
-            var loop = new List<Vertex> { start, end };
-            Vertex current = end;
-
-            while (current != start && outgoing.TryGetValue(current, out List<Vertex>? candidates))
-            {
-                Vertex? next = candidates.FirstOrDefault(candidate => remaining.Contains((current, candidate)));
-                if (next == null)
-                {
-                    break;
-                }
-
-                remaining.Remove((current, next.Value));
-                current = next.Value;
-                loop.Add(current);
-            }
-
-            if (loop.Count >= 4 && loop[0] == loop[^1])
-            {
-                loops.Add(loop);
-            }
-        }
-
-        return loops;
-    }
+    private static double[] ToLngLat(FireEnvironment environment, int gridX, int gridY)
+        => environment.ToLngLat((gridX - 0.5) * environment.CellKm, (gridY - 0.5) * environment.CellKm);
 
     private static IEnumerable<List<FireCell>> ConnectedComponents(List<FireCell> cells)
     {
@@ -180,6 +114,32 @@ public static class FireFrameBuilder
             }
 
             yield return component;
+        }
+    }
+
+    private static IEnumerable<List<FireCell>> BuildHorizontalRuns(List<FireCell> cells)
+    {
+        foreach (IGrouping<int, FireCell> row in cells.GroupBy(cell => cell.Coordinate.Y))
+        {
+            List<FireCell> sorted = row.OrderBy(cell => cell.Coordinate.X).ToList();
+            var run = new List<FireCell>();
+            int? previousX = null;
+            foreach (FireCell cell in sorted)
+            {
+                if (previousX.HasValue && cell.Coordinate.X != previousX.Value + 1)
+                {
+                    yield return run;
+                    run = [];
+                }
+
+                run.Add(cell);
+                previousX = cell.Coordinate.X;
+            }
+
+            if (run.Count > 0)
+            {
+                yield return run;
+            }
         }
     }
 
@@ -278,20 +238,6 @@ public static class FireFrameBuilder
         }
     }
 
-    private static double SignedArea(IReadOnlyList<Vertex> loop)
-    {
-        double area = 0;
-        for (int i = 0; i < loop.Count - 1; i++)
-        {
-            area += loop[i].X * loop[i + 1].Y - loop[i + 1].X * loop[i].Y;
-        }
-
-        return area * 0.5;
-    }
-
-    private static bool SameCoordinate(double[] left, double[] right)
-        => Math.Abs(left[0] - right[0]) < 0.000000001 && Math.Abs(left[1] - right[1]) < 0.000000001;
-
     private static string ToWireName(FireCellState state) => state switch
     {
         FireCellState.Unburned => "unburned",
@@ -313,6 +259,4 @@ public static class FireFrameBuilder
         FuelType.Urban => "urban",
         _ => throw new ArgumentOutOfRangeException(nameof(fuel), fuel, null)
     };
-
-    private readonly record struct Vertex(int X, int Y);
 }

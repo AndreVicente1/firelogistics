@@ -47,7 +47,14 @@ test("Core fire runtime IPC messages are documented", () => {
 
   assert.match(contracts, /fire_command/);
   assert.match(contracts, /fire_fuel_overrides_ready/);
+  assert.match(contracts, /originX/);
+  assert.match(contracts, /originY/);
   assert.match(contracts, /receiveFireFrame/);
+  assert.match(contracts, /requestFuelSample/);
   assert.match(contracts, /incidentSeed/);
+  assert.match(contracts, /revision/);
+  assert.match(contracts, /reason/);
+  assert.match(contracts, /paused/);
+  assert.match(contracts, /MultiPolygon/);
   assert.match(contracts, /must not use inner rings/);
 });

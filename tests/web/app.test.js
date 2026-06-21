@@ -86,8 +86,8 @@ test("map style includes tactical wildfire layers above terrain and below roads"
   const layerIds = style.layers.map(layer => layer.id);
 
   assert.equal(style.sources[FIRE_SOURCE_ID].type, "geojson");
-  assert.ok(style.sources[FIRE_SOURCE_ID].data.features.length > 0);
-  assert.ok(style.sources[FIRE_SOURCE_ID].data.features.every(feature => feature.properties.fuel));
+  assert.equal(style.sources[FIRE_SOURCE_ID].data.type, "FeatureCollection");
+  assert.deepEqual(style.sources[FIRE_SOURCE_ID].data.features, []);
   assert.deepEqual(fireLayers.map(layer => layer.id), [
     "fire-heat",
     "fire-active-core",
@@ -138,7 +138,33 @@ test("wildfire polygons are filled surfaces without donut holes", () => {
   assert.ok(frame.zones.features.every(feature => feature.geometry.coordinates.length === 1));
 });
 
-test("received Core fire frames update MapLibre sources", () => {
+test("fire surface renderer groups adjacent rectangles into one organic blob", () => {
+  const { buildSurfaceBlobs } = require("../../assets/web/js/fire-effects.js");
+  const feature = {
+    geometry: {
+      type: "MultiPolygon",
+      coordinates: [
+        [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+        [[[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]]],
+        [[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]]
+      ]
+    },
+    properties: { state: "active" }
+  };
+  const map = {
+    project(lngLat) {
+      return { x: lngLat[0] * 10, y: lngLat[1] * 10 };
+    }
+  };
+
+  const blobs = buildSurfaceBlobs(map, [feature], "active");
+
+  assert.equal(blobs.length, 1);
+  assert.ok(blobs[0].points.length > 20);
+  assert.ok(blobs[0].points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y)));
+});
+
+test("received Core fire frames update ignition without replacing fire source data", () => {
   const {
     FIRE_SOURCE_ID,
     applyFireFrameToSources,
@@ -158,8 +184,115 @@ test("received Core fire frames update MapLibre sources", () => {
 
   applyFireFrameToSources(map, frame, frame.center);
 
-  assert.equal(calls[FIRE_SOURCE_ID], frame.zones);
+  assert.equal(calls[FIRE_SOURCE_ID], undefined);
   assert.equal(calls["wildfire-ignition"].features[0].geometry.coordinates[0], frame.center[0]);
+});
+
+test("fire zone updates are hashed without MapLibre setData churn", () => {
+  const {
+    FIRE_SOURCE_ID,
+    applyFireFrameToSources,
+    buildFireSimulationFrame,
+    createFireRenderState
+  } = require("../../assets/web/js/app.js");
+  const frame = buildFireSimulationFrame(3);
+  const renderState = createFireRenderState();
+  let fireUpdates = 0;
+  const map = {
+    __fireRenderState: renderState,
+    getSource(id) {
+      return {
+        setData() {
+          if (id === FIRE_SOURCE_ID) fireUpdates += 1;
+        }
+      };
+    }
+  };
+
+  assert.equal(applyFireFrameToSources(map, frame, frame.center), true);
+  assert.equal(applyFireFrameToSources(map, frame, frame.center), true);
+
+  assert.equal(fireUpdates, 0);
+  assert.equal(renderState.lastZonesHash, JSON.stringify(frame.zones));
+});
+
+test("Core fire frames received before map init are kept pending", () => {
+  require("../../assets/web/js/app.js");
+  const frame = {
+    step: 1,
+    center: [5.4, 43.3],
+    incidentSeed: 77,
+    zones: { type: "FeatureCollection", features: [] },
+    emitters: [],
+    stats: {},
+    wind: {},
+    status: "running"
+  };
+
+  global.FireLogistics.fireController = null;
+  global.FireLogistics.receiveFireFrame(frame);
+
+  assert.equal(global.FireLogistics.pendingFireFrame, frame);
+});
+
+test("Core frame revisions are deduplicated before render", () => {
+  const {
+    createFireRenderState,
+    isNewerCoreFrame,
+    markCoreFrameApplied
+  } = require("../../assets/web/js/app.js");
+  const renderState = createFireRenderState();
+  const first = { incidentSeed: 10, revision: 1 };
+  const duplicate = { incidentSeed: 10, revision: 1 };
+  const next = { incidentSeed: 10, revision: 2 };
+  const newIncident = { incidentSeed: 11, revision: 1 };
+
+  assert.equal(isNewerCoreFrame(renderState, first), true);
+  markCoreFrameApplied(renderState, first);
+  assert.equal(isNewerCoreFrame(renderState, duplicate), false);
+  assert.equal(isNewerCoreFrame(renderState, next), true);
+  assert.equal(isNewerCoreFrame(renderState, newIncident), true);
+});
+
+test("Core mode buttons derive commands from authoritative frame status", () => {
+  const { getCoreToggleCommand } = require("../../assets/web/js/app.js");
+
+  assert.equal(getCoreToggleCommand({ status: "running" }), "pause");
+  assert.equal(getCoreToggleCommand({ status: "paused" }), "resume");
+  assert.equal(getCoreToggleCommand({ status: "extinguished" }), "pause");
+});
+
+test("incident seed changes require clearing fire effects", () => {
+  const { shouldClearFireEffects } = require("../../assets/web/js/app.js");
+
+  assert.equal(shouldClearFireEffects({ incidentSeed: 1 }, { incidentSeed: 1 }), false);
+  assert.equal(shouldClearFireEffects({ incidentSeed: 1 }, { incidentSeed: 2 }), true);
+});
+
+test("rendered fuel samples include explicit sparse-grid origin", () => {
+  const { createRenderedFuelSample } = require("../../assets/web/js/app.js");
+  const map = {
+    project(lngLat) {
+      return { x: lngLat[0], y: lngLat[1] };
+    },
+    queryRenderedFeatures() {
+      return [{ layer: { id: "fuel-water" } }];
+    }
+  };
+
+  const sample = createRenderedFuelSample(map, [5.38, 43.3], {
+    originX: -2,
+    originY: -1,
+    width: 3,
+    height: 2,
+    cellKm: 0.18
+  });
+
+  assert.equal(sample.originX, -2);
+  assert.equal(sample.originY, -1);
+  assert.equal(sample.width, 3);
+  assert.equal(sample.height, 2);
+  assert.deepEqual(sample.fuels, ["water", "water", "water", "water", "water", "water"]);
 });
 
 test("wildfire exposes nearby buildings without making water or mineral burn", () => {

@@ -4,7 +4,7 @@ public sealed class FireEnvironment
 {
     public const double DefaultCellKm = 0.18;
 
-    private readonly IReadOnlyDictionary<FireGridCoordinate, FuelType> _fuelOverrides;
+    private readonly Dictionary<FireGridCoordinate, FuelType> _fuelOverrides;
 
     public FireEnvironment(
         double longitude,
@@ -17,7 +17,7 @@ public sealed class FireEnvironment
         Latitude = latitude;
         IncidentSeed = incidentSeed;
         CellKm = cellKm;
-        _fuelOverrides = fuelOverrides ?? new Dictionary<FireGridCoordinate, FuelType>();
+        _fuelOverrides = fuelOverrides?.ToDictionary() ?? [];
     }
 
     public double Longitude { get; }
@@ -88,6 +88,14 @@ public sealed class FireEnvironment
 
     public (double XKm, double YKm) GetLocalKm(FireGridCoordinate coordinate)
         => (coordinate.X * CellKm, coordinate.Y * CellKm);
+
+    public void MergeFuelOverrides(IReadOnlyDictionary<FireGridCoordinate, FuelType> fuelOverrides)
+    {
+        foreach ((FireGridCoordinate coordinate, FuelType fuel) in fuelOverrides)
+        {
+            _fuelOverrides[coordinate] = fuel;
+        }
+    }
 
     public double[] ToLngLat(double xKm, double yKm)
     {

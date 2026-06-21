@@ -2,6 +2,8 @@ namespace FireLogistics.Core.World.Fire;
 
 public sealed record FireSimulationFrame(
     int Step,
+    int Revision,
+    string Reason,
     double[] Center,
     int IncidentSeed,
     FireFeatureCollection Zones,
@@ -24,7 +26,7 @@ public sealed record FireFeatureProperties(
     double Intensity,
     int CellCount);
 
-public sealed record FireGeometry(string Type, IReadOnlyList<IReadOnlyList<double[]>> Coordinates);
+public sealed record FireGeometry(string Type, object Coordinates);
 
 public sealed record FireEmitter(string Id, double[] LngLat, double Intensity, string Type);
 
@@ -37,3 +39,5 @@ public sealed record FireStats(
     IReadOnlyDictionary<string, int> FuelImpacts);
 
 public sealed record FireWind(string Direction, int Degrees, int SpeedKmh);
+
+public sealed record FireFuelSampleRequest(int OriginX, int OriginY, int Width, int Height, double CellKm);

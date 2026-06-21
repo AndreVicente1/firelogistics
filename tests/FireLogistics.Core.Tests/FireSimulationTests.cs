@@ -76,9 +76,50 @@ public sealed class FireSimulationTests
         FireSimulator.Advance(state, 20);
 
         Assert.All(state.Cells.Values.Where(cell => cell.Fuel is FuelType.Water or FuelType.Mineral), cell =>
-            Assert.True(cell.State is FireCellState.Unburned or FireCellState.Burned));
+            Assert.Equal(FireCellState.Unburned, cell.State));
         Assert.DoesNotContain(state.Cells.Values.Where(cell => cell.Fuel is FuelType.Water or FuelType.Mineral), cell =>
             cell.State is FireCellState.Active or FireCellState.Heat or FireCellState.Embers);
+    }
+
+    [Fact]
+    public void LateWaterOverrideClearsAlreadyBurningCell()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 12);
+        FireCell active = state.Cells.Values.First(cell => cell.State == FireCellState.Active);
+
+        state.ApplyFuelOverrides(new Dictionary<FireGridCoordinate, FuelType>
+        {
+            [active.Coordinate] = FuelType.Water
+        });
+
+        FireCell updated = state.Cells[active.Coordinate];
+        Assert.Equal(FuelType.Water, updated.Fuel);
+        Assert.Equal(FireCellState.Unburned, updated.State);
+        Assert.Equal(0, updated.Heat);
+        Assert.Equal(0, updated.Intensity);
+        Assert.Equal(0, updated.FuelLoad);
+    }
+
+    [Fact]
+    public void SpottingCanCrossWaterWithoutBurningWater()
+    {
+        var overrides = new Dictionary<FireGridCoordinate, FuelType>();
+        for (int y = -20; y <= 20; y++)
+        {
+            for (int x = -8; x <= 12; x++)
+            {
+                overrides[new FireGridCoordinate(x, y)] = x is >= 1 and <= 3 ? FuelType.Water : FuelType.Forest;
+            }
+        }
+
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 6, fuelOverrides: overrides);
+        FireSimulator.Advance(state, 120);
+
+        Assert.All(state.Cells.Values.Where(cell => cell.Fuel == FuelType.Water), cell =>
+            Assert.Equal(FireCellState.Unburned, cell.State));
+        Assert.Contains(state.Cells.Values, cell =>
+            cell.Coordinate.X >= 4
+            && cell.State is FireCellState.Active or FireCellState.Embers or FireCellState.Burned);
     }
 
     [Fact]
@@ -90,7 +131,24 @@ public sealed class FireSimulationTests
         FireSimulationFrame frame = FireFrameBuilder.Build(state);
 
         Assert.NotEmpty(frame.Zones.Features);
-        Assert.All(frame.Zones.Features, feature => Assert.Single(feature.Geometry.Coordinates));
+        Assert.All(frame.Zones.Features, feature =>
+        {
+            Assert.Equal("MultiPolygon", feature.Geometry.Type);
+            var polygons = Assert.IsAssignableFrom<IEnumerable<IReadOnlyList<IReadOnlyList<double[]>>>>(feature.Geometry.Coordinates);
+            Assert.All(polygons, polygon => Assert.Single(polygon));
+        });
+        Assert.DoesNotContain(frame.Zones.Features, feature => feature.Properties.Fuel is "water" or "mineral");
+    }
+
+    [Fact]
+    public void FireFrameCarriesRevisionAndReason()
+    {
+        FireSimulationState state = FireSimulator.Create(5.38, 43.3, incidentSeed: 42);
+
+        FireSimulationFrame frame = FireFrameBuilder.Build(state, revision: 12, reason: "tick");
+
+        Assert.Equal(12, frame.Revision);
+        Assert.Equal("tick", frame.Reason);
     }
 
     private static string Snapshot(FireSimulationState state)

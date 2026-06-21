@@ -166,7 +166,7 @@
 
   function updateFireHud(frame, running) {
     if (!frame) return;
-    setText("simulation-value", running ? "Feu actif" : "Pause");
+    setText("simulation-value", frame.status === "extinguished" ? "Eteint" : running ? "Feu actif" : "Pause");
     setText("wind-value", `Vent ${frame.wind.direction} ${frame.wind.speedKmh} km/h`);
     setText("burned-area-value", `${frame.stats.burnedHectares} ha`);
     setText("front-length-value", `${frame.stats.frontKilometers} km`);
@@ -184,10 +184,90 @@
   }
 
   function applyFireFrameToSources(map, frame, ignitionCenter) {
-    const fireSource = map?.getSource?.(Fire.FIRE_SOURCE_ID);
+    if (map?.isStyleLoaded && !map.isStyleLoaded()) return false;
     const ignitionSource = map?.getSource?.(Fire.IGNITION_SOURCE_ID);
-    if (fireSource?.setData) fireSource.setData(frame.zones);
-    if (ignitionSource?.setData) ignitionSource.setData(Fire.buildIgnitionFeatureCollection(ignitionCenter));
+    if (!ignitionSource?.setData) return false;
+
+    const state = map.__fireRenderState || null;
+    const zonesHash = hashZones(frame.zones);
+    if (state && state.lastZonesHash !== zonesHash) state.lastZonesHash = zonesHash;
+
+    const ignitionKey = JSON.stringify(ignitionCenter);
+    if (!state || state.lastIgnitionKey !== ignitionKey) {
+      ignitionSource.setData(Fire.buildIgnitionFeatureCollection(ignitionCenter));
+      if (state) state.lastIgnitionKey = ignitionKey;
+    }
+
+    return true;
+  }
+
+  function createEmptyFireFrame(center) {
+    return {
+      step: 0,
+      center,
+      incidentSeed: 0,
+      zones: { type: "FeatureCollection", features: [] },
+      emitters: [],
+      stats: {
+        burnedHectares: 0,
+        frontKilometers: 0,
+        intensity: "Moderee",
+        activeCells: 0,
+        threatenedBuildings: 0,
+        fuelImpacts: {}
+      },
+      wind: { direction: "E-NE", degrees: 72, speedKmh: 28 },
+      status: "paused"
+    };
+  }
+
+  function createFireRenderState() {
+    return {
+      lastIncidentSeed: null,
+      lastRevision: -1,
+      lastZonesHash: null,
+      lastIgnitionKey: null,
+      pendingFrame: null,
+      renderScheduled: false,
+      counters: {
+        receiveFrame: 0,
+        setData: 0,
+        ignoredFrame: 0,
+        samplesSent: 0
+      }
+    };
+  }
+
+  function hashZones(zones) {
+    return JSON.stringify(zones);
+  }
+
+  function isNewerCoreFrame(renderState, frame) {
+    const seed = Number(frame?.incidentSeed);
+    const revision = Number(frame?.revision ?? frame?.step ?? 0);
+    const pending = renderState.pendingFrame;
+    if (pending) {
+      const pendingSeed = Number(pending.incidentSeed);
+      const pendingRevision = Number(pending.revision ?? pending.step ?? 0);
+      if (seed === pendingSeed && revision <= pendingRevision) return false;
+    }
+
+    if (renderState.lastIncidentSeed === null) return true;
+    if (seed !== renderState.lastIncidentSeed) return true;
+    return revision > renderState.lastRevision;
+  }
+
+  function markCoreFrameApplied(renderState, frame) {
+    renderState.lastIncidentSeed = Number(frame.incidentSeed);
+    renderState.lastRevision = Number(frame.revision ?? frame.step ?? 0);
+  }
+
+  function getCoreToggleCommand(frame) {
+    return frame?.status === "paused" ? "resume" : "pause";
+  }
+
+  function shouldClearFireEffects(previousFrame, nextFrame) {
+    return Boolean(previousFrame && nextFrame && previousFrame.incidentSeed !== nextFrame.incidentSeed);
   }
 
   function buildFranceWorldStyle() {
@@ -285,7 +365,7 @@
         [TERRAIN_SOURCE_ID]: buildTerrainSourceDefinition(),
         [Fire.FIRE_SOURCE_ID]: {
           type: "geojson",
-          data: Fire.buildFireSimulationFrame(0, { center: Fire.DEFAULT_FIRE_CENTER }).zones
+          data: { type: "FeatureCollection", features: [] }
         },
         [Fire.IGNITION_SOURCE_ID]: {
           type: "geojson",
@@ -322,22 +402,34 @@
     let running = true;
     let center = Fire.DEFAULT_FIRE_CENTER;
     let fuelOverrides = null;
-    let state = Fire.createFireSimulationState({ center, fuelOverrides });
-    let frame = Fire.buildFireSimulationFrameFromState(state);
+    let state = usesCoreSimulation ? null : Fire.createFireSimulationState({ center, fuelOverrides });
+    let frame = usesCoreSimulation
+      ? (api.pendingFireFrame || createEmptyFireFrame(center))
+      : Fire.buildFireSimulationFrameFromState(state);
     let lastTick = performance.now();
+    let surfaces = null;
+    let effects = null;
+    const renderState = createFireRenderState();
     const fireSource = map.getSource(Fire.FIRE_SOURCE_ID);
     const ignitionSource = map.getSource(Fire.IGNITION_SOURCE_ID);
+    map.__fireRenderState = renderState;
 
     function publish() {
-      applyFireFrameToSources({
+      const applied = applyFireFrameToSources({
+        __fireRenderState: renderState,
+        isStyleLoaded() {
+          return !map.isStyleLoaded || map.isStyleLoaded();
+        },
         getSource(id) {
           return map.getSource(id) || (id === Fire.FIRE_SOURCE_ID ? fireSource : ignitionSource);
         }
       }, frame, center);
       updateFireHud(frame, running);
+      return applied;
     }
 
     function rebuildFrame() {
+      if (!state) return;
       frame = Fire.buildFireSimulationFrameFromState(state);
       publish();
     }
@@ -351,17 +443,20 @@
     }
 
     function refreshRenderedFuelModel() {
-      const renderedOverrides = Fire.createRenderedFuelOverrides(map, center);
-      if (!renderedOverrides) return;
       if (usesCoreSimulation) {
-        sendToGodot("fire_fuel_overrides_ready", {
-          width: Fire.FIRE_GRID.width,
-          height: Fire.FIRE_GRID.height,
-          cellKm: Fire.FIRE_GRID.cellKm,
-          fuels: renderedOverrides
+        const sample = createRenderedFuelSample(map, center, {
+          originX: -64,
+          originY: -48,
+          width: 129,
+          height: 97,
+          cellKm: Fire.FIRE_GRID.cellKm
         });
+        if (sample) sendToGodot("fire_fuel_overrides_ready", sample);
         return;
       }
+
+      const renderedOverrides = Fire.createRenderedFuelOverrides(map, center);
+      if (!renderedOverrides) return;
       rebuildStateWithFuelOverrides(renderedOverrides);
     }
 
@@ -379,8 +474,17 @@
       global.requestAnimationFrame(animate);
     }
 
-    publish();
-    FireEffects.createFireParticleOverlay(map, () => frame, () => running);
+    if (!usesCoreSimulation) {
+      publish();
+    } else {
+      updateFireHud(frame, false);
+    }
+    surfaces = FireEffects.createFireSurfaceOverlay?.(map, () => frame);
+    effects = FireEffects.createFireParticleOverlay(map, () => frame, () => running);
+    if (usesCoreSimulation && api.pendingFireFrame) {
+      queueCoreFrame(api.pendingFireFrame);
+      api.pendingFireFrame = null;
+    }
     map.once("idle", refreshRenderedFuelModel);
     global.requestAnimationFrame(animate);
 
@@ -390,30 +494,50 @@
       },
       receiveFrame(nextFrame) {
         if (!nextFrame) return;
+        if (usesCoreSimulation) {
+          queueCoreFrame(nextFrame);
+          return;
+        }
+
+        const changedIncident = shouldClearFireEffects(frame, nextFrame);
         frame = nextFrame;
-        running = nextFrame.status !== "extinguished" && running;
-        publish();
+        center = nextFrame.center || center;
+        running = nextFrame.status === "running";
+      if (changedIncident && effects?.clear) effects.clear();
+      if (changedIncident && surfaces?.clear) surfaces.clear();
+      publish();
+      surfaces?.requestRender?.();
       },
       toggle() {
-        running = !running;
         if (usesCoreSimulation) {
-          sendToGodot("fire_command", { command: running ? "resume" : "pause" });
+          sendToGodot("fire_command", { command: getCoreToggleCommand(frame) });
+          return running;
         }
+
+        running = !running;
         updateFireHud(frame, running);
         return running;
       },
       reset() {
-        running = true;
         if (usesCoreSimulation) {
+          effects?.clear?.();
+          surfaces?.clear?.();
           sendToGodot("fire_command", { command: "reset" });
-          updateFireHud(frame, running);
           return;
         }
+        running = true;
         state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
         rebuildFrame();
       },
       setIgnitionCenter(lngLat) {
         center = [Number(lngLat[0]), Number(lngLat[1])];
+        if (usesCoreSimulation) {
+          effects?.clear?.();
+          surfaces?.clear?.();
+          sendToGodot("fire_ignition_selected", { center });
+          return;
+        }
+
         running = true;
         fuelOverrides = null;
         state = Fire.resetFireSimulationState(state, { center, fuelOverrides });
@@ -421,8 +545,90 @@
         refreshRenderedFuelModel();
         map.once("idle", refreshRenderedFuelModel);
         sendToGodot("fire_ignition_selected", { center });
+      },
+      requestFuelSample(request) {
+        const sample = createRenderedFuelSample(map, center, request);
+        if (sample) {
+          renderState.counters.samplesSent += 1;
+          sendToGodot("fire_fuel_overrides_ready", sample);
+        }
       }
     };
+
+    function queueCoreFrame(nextFrame) {
+      renderState.counters.receiveFrame += 1;
+      if (!isNewerCoreFrame(renderState, nextFrame)) {
+        renderState.counters.ignoredFrame += 1;
+        return;
+      }
+
+      renderState.pendingFrame = nextFrame;
+      if (renderState.renderScheduled) return;
+      renderState.renderScheduled = true;
+      global.requestAnimationFrame(applyPendingCoreFrame);
+    }
+
+    function applyPendingCoreFrame() {
+      renderState.renderScheduled = false;
+      const nextFrame = renderState.pendingFrame;
+      if (!nextFrame) return;
+      if (map.isStyleLoaded && !map.isStyleLoaded()) {
+        renderState.renderScheduled = true;
+        global.requestAnimationFrame(applyPendingCoreFrame);
+        return;
+      }
+
+      const changedIncident = shouldClearFireEffects(frame, nextFrame);
+      frame = nextFrame;
+      center = nextFrame.center || center;
+      running = nextFrame.status === "running";
+      if (changedIncident && effects?.clear) effects.clear();
+      if (changedIncident && surfaces?.clear) surfaces.clear();
+      if (!publish()) {
+        renderState.renderScheduled = true;
+        global.requestAnimationFrame(applyPendingCoreFrame);
+        return;
+      }
+
+      markCoreFrameApplied(renderState, nextFrame);
+      renderState.pendingFrame = null;
+      surfaces?.requestRender?.();
+    }
+  }
+
+  function createRenderedFuelSample(map, center, request) {
+    if (!request) return null;
+    const width = Math.max(1, Number(request.width) || 0);
+    const height = Math.max(1, Number(request.height) || 0);
+    const originX = Number(request.originX) || 0;
+    const originY = Number(request.originY) || 0;
+    const cellKm = Number(request.cellKm) || Fire.FIRE_GRID.cellKm;
+    if (!map?.queryRenderedFeatures || !map?.project || width <= 0 || height <= 0) return null;
+
+    const queryLayers = ["buildings", "fuel-water", "fuel-mineral", "fuel-forest", "fuel-scrub", "fuel-grass", "fuel-crops", "fuel-urban"];
+    const fuels = [];
+    let resolved = 0;
+    try {
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const gridX = originX + x;
+          const gridY = originY + y;
+          const lngLat = Fire.localKmToLngLat(center, gridX * cellKm, gridY * cellKm);
+          const point = map.project(lngLat);
+          const fuel = Fire.classifyRenderedFuel
+            ? Fire.classifyRenderedFuel(map.queryRenderedFeatures(point, { layers: queryLayers }))
+            : null;
+          fuels.push(fuel);
+          if (fuel) resolved += 1;
+        }
+      }
+    } catch (error) {
+      console.warn("[FireLogistics] Echantillonnage combustible indisponible", error);
+      return null;
+    }
+
+    if (resolved <= width * height * 0.04) return null;
+    return { originX, originY, width, height, cellKm, fuels };
   }
 
   function initMap() {
@@ -480,10 +686,18 @@
   const api = {
     map: null,
     fireController: null,
+    pendingFireFrame: null,
     selectingIgnition: false,
     sendToGodot,
     receiveFireFrame(frame) {
-      api.fireController?.receiveFrame(frame);
+      if (api.fireController?.receiveFrame) {
+        api.fireController.receiveFrame(frame);
+      } else {
+        api.pendingFireFrame = frame;
+      }
+    },
+    requestFuelSample(request) {
+      api.fireController?.requestFuelSample?.(request);
     },
     updateRuntimeMetrics(metrics) {
       document.getElementById("fps-value").textContent = String(metrics?.fps ?? "--");
@@ -530,6 +744,14 @@
       buildFireLegendItems: Fire.buildFireLegendItems,
       buildFireSimulationFrame: Fire.buildFireSimulationFrame,
       applyFireFrameToSources,
+      createEmptyFireFrame,
+      createFireRenderState,
+      createRenderedFuelSample,
+      hashZones,
+      isNewerCoreFrame,
+      markCoreFrameApplied,
+      getCoreToggleCommand,
+      shouldClearFireEffects,
       buildFranceWorldStyle,
       buildFuelLayerDefinitions,
       buildFuelLegendItems,

@@ -16,7 +16,7 @@ Supported JS -> C# actions:
 - `quit_game`: asks Godot to quit the current tree.
 - `fire_ignition_selected`: reports a selected ignition center as `{ "center": [longitude, latitude] }`.
 - `fire_command`: controls the Core fire runtime with `{ "command": "pause" | "resume" | "reset" }`.
-- `fire_fuel_overrides_ready`: reports optional rendered-map fuels as `{ "width": number, "height": number, "cellKm": number, "fuels": string[] }`.
+- `fire_fuel_overrides_ready`: reports optional rendered-map fuels as `{ "originX": number, "originY": number, "width": number, "height": number, "cellKm": number, "fuels": string[] }`. This message may be sent repeatedly; C# merges the samples into the current incident instead of resetting it.
 
 C# publishes the authoritative fire simulation frame by evaluating:
 
@@ -29,6 +29,8 @@ window.FireLogistics.receiveFireFrame(frame)
 ```json
 {
   "step": 0,
+  "revision": 1,
+  "reason": "initial",
   "center": [5.38, 43.3],
   "incidentSeed": 1,
   "zones": { "type": "FeatureCollection", "features": [] },
@@ -46,7 +48,17 @@ window.FireLogistics.receiveFireFrame(frame)
 }
 ```
 
-`zones` remains GeoJSON for MapLibre. Fire polygons are exterior-filled tactical surfaces; they must not use inner rings to create donut-shaped active fronts.
+`status` is `"running"`, `"paused"`, or `"extinguished"`. The browser must use the C# frame status as authoritative and must not advance or rebuild the fire locally while connected to Godot.
+
+`revision` is monotonic within an incident and `reason` explains why the frame was published (`"initial"`, `"tick"`, `"command"`, `"reset"`, `"ignition"`, or `"fuel_sample"`). The browser must apply only the newest Core frame for an incident and coalesce multiple received frames so MapLibre is updated at most once per browser animation frame.
+
+`zones` remains GeoJSON for MapLibre. Fire feature geometry may be `Polygon` or `MultiPolygon`; individual polygons are exterior-filled tactical surfaces and must not use inner rings to create donut-shaped active fronts. Fire zones must not visually cover non-burnable water or mineral cells.
+
+C# can ask the browser to resample rendered fuels around the moving front by evaluating:
+
+```js
+window.FireLogistics.requestFuelSample({ originX, originY, width, height, cellKm })
+```
 
 C# publishes runtime metrics by evaluating:
 

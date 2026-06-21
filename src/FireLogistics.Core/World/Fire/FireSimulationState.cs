@@ -30,6 +30,18 @@ public sealed class FireSimulationState
         return cell;
     }
 
+    public void ApplyFuelOverrides(IReadOnlyDictionary<FireGridCoordinate, FuelType> fuelOverrides)
+    {
+        Environment.MergeFuelOverrides(fuelOverrides);
+        foreach ((FireGridCoordinate coordinate, FuelType fuel) in fuelOverrides)
+        {
+            if (_cells.TryGetValue(coordinate, out FireCell? cell))
+            {
+                cell.ApplyFuel(fuel);
+            }
+        }
+    }
+
     private void IgniteInitialCells()
     {
         for (int y = -2; y <= 2; y++)

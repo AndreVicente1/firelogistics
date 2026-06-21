@@ -28,6 +28,12 @@ public static class FireSimulator
         Dictionary<FireGridCoordinate, FireCell> next = state.Cells.ToDictionary(pair => pair.Key, pair => pair.Value.Clone());
         foreach (FireCell source in state.Cells.Values.ToArray())
         {
+            if (!FuelBehavior.For(source.Fuel).Burnable)
+            {
+                source.ApplyFuel(source.Fuel);
+                continue;
+            }
+
             if (source.State is not (FireCellState.Active or FireCellState.Embers))
             {
                 continue;
@@ -49,6 +55,12 @@ public static class FireSimulator
                     {
                         targetNext = target.Clone();
                         next.Add(targetCoordinate, targetNext);
+                    }
+
+                    if (!FuelBehavior.For(target.Fuel).Burnable)
+                    {
+                        targetNext.ApplyFuel(target.Fuel);
+                        continue;
                     }
 
                     if (target.State is FireCellState.Burned or FireCellState.Active)
@@ -124,7 +136,7 @@ public static class FireSimulator
             }
 
             FuelBehavior targetBehavior = FuelBehavior.For(candidate.Fuel);
-            if (!targetBehavior.Burnable || candidate.State is FireCellState.Active or FireCellState.Burned || candidate.Heat < 0.12)
+            if (!targetBehavior.Burnable || candidate.State is FireCellState.Active or FireCellState.Burned)
             {
                 continue;
             }
@@ -143,6 +155,12 @@ public static class FireSimulator
         foreach (FireCell cell in cells)
         {
             FuelBehavior behavior = FuelBehavior.For(cell.Fuel);
+            if (!behavior.Burnable)
+            {
+                cell.ApplyFuel(cell.Fuel);
+                continue;
+            }
+
             if (cell.State == FireCellState.Active)
             {
                 cell.Age++;

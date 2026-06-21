@@ -21,7 +21,7 @@ public sealed class FireCell
     }
 
     public FireGridCoordinate Coordinate { get; }
-    public FuelType Fuel { get; }
+    public FuelType Fuel { get; private set; }
     public FireCellState State { get; set; }
     public int Age { get; set; }
     public double Heat { get; set; }
@@ -29,4 +29,21 @@ public sealed class FireCell
     public double Intensity { get; set; }
 
     public FireCell Clone() => new(this);
+
+    public void ApplyFuel(FuelType fuel)
+    {
+        Fuel = fuel;
+        FuelBehavior behavior = FuelBehavior.For(fuel);
+        if (behavior.Burnable)
+        {
+            FuelLoad = FuelLoad <= 0 ? 1 : FuelLoad;
+            return;
+        }
+
+        State = FireCellState.Unburned;
+        Age = 0;
+        Heat = 0;
+        FuelLoad = 0;
+        Intensity = 0;
+    }
 }
